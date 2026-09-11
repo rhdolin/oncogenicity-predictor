@@ -10,13 +10,24 @@
 
 ## High-Level Flow
 
-1. Validate incoming variant input.
+1. Validate incoming HGVS variant input.
 2. Submit the variant to ClinGen for normalization.
-3. Reject malformed or unnormalizable variants with a structured error response.
+3. Reject malformed or unnormalizable variants with a structured error response instead of creating a `NormalizedVariant`.
 4. Use the normalized variant to collect annotations from VEP.
 5. Run evidence pipelines.
 6. Combine evidence into a final oncogenicity score.
 7. Format the result and supporting evidence as FHIR.
+
+## Current Implementation Slice
+
+- The deployed API has already been validated on Render.
+- The first non-stub implementation slice is variant normalization.
+- `GET /predictOncogenicity` and `POST /predictOncogenicity` currently return internal normalization results rather than final FHIR payloads.
+- Submitted variants must currently be provided in HGVS format.
+- The route layer calls an orchestration layer, which currently delegates to the ClinGen-backed variant normalizer.
+- `canonical_b37` is currently populated only from a transcript allele that has a `genomeAlignments` entry for `GRCh37`, using the first primary `NM_` HGVS string from that transcript.
+- `representative_transcript_hgvs` is currently populated from the best available NCBI RefSeq transcript in this order: `mane_select_b38`, then `canonical_b37`, then the first `NM_` transcript returned by ClinGen.
+- Coordinate normalization currently emits `chrM` for mitochondrial variants, and uses `23` for X plus `24` for Y in `chrom_num`.
 
 ## Evidence Pipelines
 
@@ -33,6 +44,7 @@
 - Keep scoring separate from HTTP and FHIR serialization.
 - Treat partial evidence availability as a normal case rather than a fatal error.
 - Preserve provenance for evidence and final scoring decisions.
+- Only instantiate `NormalizedVariant` on successful normalization.
 
 ## Evaluation Plan
 
@@ -56,9 +68,14 @@ oncogenicity-predictor/
 │   ├── main.py
 │   ├── api/
 │   │   └── routes.py
+│   ├── models/
+│   │   ├── normalized_variant.py
+│   │   └── requests.py
 │   ├── services/
 │   │   ├── normalization/
 │   │   │   └── variant_normalizer.py
+│   │   ├── orchestration/
+│   │   │   └── single_variant_pipeline.py
 │   │   ├── annotation/
 │   │   │   └── variant_annotator.py
 │   │   ├── evidence/
@@ -71,9 +88,6 @@ oncogenicity-predictor/
 │   │   │   └── calculator.py
 │   │   └── fhir/
 │   │       └── observation_builder.py
-│   └── models/
-│       ├── requests.py
-│       └── results.py
 ├── evaluation/
 │   ├── datasets/
 │   ├── runners/
@@ -89,7 +103,29 @@ oncogenicity-predictor/
 
 ## Near-Term Questions
 
-1. What exact input format should the API require for submitted variants?
+1. How strict should HGVS validation become before calling ClinGen?
 2. What are the minimum FHIR fields guaranteed in every response?
 3. Which score output is authoritative for evaluation: numeric score, discrete class, or both?
 4. Which pieces of `llm-oncogenicity` are worth migrating first?
+
+## NormalizedVariant Shape
+
+The current internal normalization target is intentionally permissive.
+
+- Required: `submitted_variant`
+- Required: `normalization.source`
+- Required: `normalization.queried_variant`
+- Optional: `identifiers.caid`
+- Optional: `geneSymbol`
+- Optional: `geneNCBI_id`
+- Optional: all genomic, transcript, protein, and coordinate representations
+- Optional: `protein.civic_profile_name`, which is currently computed locally from `geneSymbol` plus the derived protein short name
+
+Notes:
+
+- `uniprot_id` is intentionally deferred and is not currently part of the normalization model.
+- The current implementation assumes successful normalization returns a `NormalizedVariant`; malformed or unnormalizable input returns an error instead.
+- Normalized genomic, transcript, and protein fields are populated only from NCBI RefSeq accessions: `NC_`, `NM_`, and `NP_`.
+- `representative_transcript_hgvs` is available as a practical fallback when MANE and canonical transcript fields are absent.
+
+The object is only created on successful normalization. Failures are handled as errors rather than partial `NormalizedVariant` instances.
