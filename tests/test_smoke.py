@@ -19,7 +19,7 @@ def test_root_exposes_docs() -> None:
 
 
 def test_predict_single_returns_observation() -> None:
-    response = client.get("/predict", params={"variant": "KRAS p.G12D"})
+    response = client.get("/predictOncogenicity", params={"variant": "KRAS p.G12D"})
 
     assert response.status_code == 200
     body = response.json()
@@ -28,7 +28,7 @@ def test_predict_single_returns_observation() -> None:
 
 
 def test_predict_batch_returns_bundle() -> None:
-    response = client.post("/predict", json={"variants": ["KRAS p.G12D", "BRAF p.V600E"]})
+    response = client.post("/predictOncogenicity", json={"variants": ["KRAS p.G12D", "BRAF p.V600E"]})
 
     assert response.status_code == 200
     body = response.json()

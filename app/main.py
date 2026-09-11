@@ -48,12 +48,12 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/predict")
+@app.get("/predictOncogenicity")
 def predict_single(variant: str) -> dict:
     return build_observation(variant)
 
 
-@app.post("/predict")
+@app.post("/predictOncogenicity")
 def predict_batch(request: BatchRequest) -> dict:
     return {
         "resourceType": "Bundle",

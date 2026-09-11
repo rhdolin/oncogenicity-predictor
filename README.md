@@ -6,12 +6,12 @@ This repository currently contains a minimal FastAPI service for validating loca
 
 - `GET /`
 - `GET /health`
-- `GET /predict?variant=KRAS%20p.G12D`
-- `POST /predict`
+- `GET /predictOncogenicity?variant=KRAS%20p.G12D`
+- `POST /predictOncogenicity`
 - `GET /docs`
 
-The current `GET /predict` endpoint returns a stub FHIR `Observation`.
-The current `POST /predict` endpoint returns a stub FHIR `Bundle`.
+The current `GET /predictOncogenicity` endpoint returns a stub FHIR `Observation`.
+The current `POST /predictOncogenicity` endpoint returns a stub FHIR `Bundle`.
 
 ## Local Run
 
