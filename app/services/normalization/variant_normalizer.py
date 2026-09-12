@@ -182,6 +182,7 @@ def _extract_transcript_representations(record: dict) -> TranscriptHgvsRepresent
             refseq_hgvs = (((mane.get("nucleotide") or {}).get("RefSeq") or {}).get("hgvs"))
             if refseq_hgvs and refseq_hgvs.startswith("NM_"):
                 transcript_hgvs.mane_select_b38 = refseq_hgvs
+                transcript_hgvs.mane_select_b38_source = "clingen"
                 break
 
     for transcript_allele in transcript_alleles:

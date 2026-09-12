@@ -7,9 +7,11 @@ app = FastAPI(
     title="Oncogenicity Predictor",
     description=(
         "Prototype API for oncogenicity prediction. The current implementation "
-        "normalizes submitted variants through ClinGen and returns the internal "
-        "normalized-variant representation. Submitted variants must currently be "
-        "provided in HGVS format."
+        "normalizes submitted variants through ClinGen, annotates them through "
+        "Ensembl VEP, and returns the internal AnnotatedVariant representation. "
+        "Submitted variants must currently be provided in HGVS format. When VEP "
+        "annotation fails, the API still returns AnnotatedVariant with annotation "
+        "failure metadata instead of failing the whole request."
     ),
     version="0.1.0",
 )

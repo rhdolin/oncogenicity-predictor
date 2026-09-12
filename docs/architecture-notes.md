@@ -5,7 +5,8 @@
 - Framework: FastAPI
 - Deployment target: Render
 - Public contract: single-variant `GET` and batch `POST`
-- Response format: FHIR `Observation` for a single variant and a FHIR `Bundle` for batch results
+- Current response format: internal `AnnotatedVariant` for a single variant and `AnnotatedVariantBatchResponse` for batch results
+- Target later response format: FHIR `Observation` for a single variant and a FHIR `Bundle` for batch results
 - Scope: deterministic service implementation of the scoring approach described in https://pmc.ncbi.nlm.nih.gov/articles/PMC9081216/
 
 ## High-Level Flow
@@ -21,13 +22,27 @@
 ## Current Implementation Slice
 
 - The deployed API has already been validated on Render.
-- The first non-stub implementation slice is variant normalization.
-- `GET /predictOncogenicity` and `POST /predictOncogenicity` currently return internal normalization results rather than final FHIR payloads.
+- The current non-stub implementation slice is variant normalization plus first-pass annotation.
+- `GET /predictOncogenicity` and `POST /predictOncogenicity` currently return internal `AnnotatedVariant` results rather than final FHIR payloads.
 - Submitted variants must currently be provided in HGVS format.
-- The route layer calls an orchestration layer, which currently delegates to the ClinGen-backed variant normalizer.
+- The route layer calls an orchestration layer, which currently delegates to the ClinGen-backed variant normalizer and then the VEP-backed variant annotator.
 - `canonical_b37` is currently populated only from a transcript allele that has a `genomeAlignments` entry for `GRCh37`, using the first primary `NM_` HGVS string from that transcript.
 - `representative_transcript_hgvs` is currently populated from the best available NCBI RefSeq transcript in this order: `mane_select_b38`, then `canonical_b37`, then the first `NM_` transcript returned by ClinGen.
+- `mane_select_b38` is populated from ClinGen when available; if ClinGen does not provide MANE Select, the annotation step can backfill it from VEP `hgvsc` on the MANE-marked RefSeq transcript row and mark `mane_select_b38_source` as `vep`.
 - Coordinate normalization currently emits `chrM` for mitochondrial variants, and uses `23` for X plus `24` for Y in `chrom_num`.
+- The VEP query strategy for v1 is intentionally narrow: try `genomic_hgvs.GRCh38` first, then `transcript_hgvs.mane_select_b38`, and stop there.
+
+## Current AnnotatedVariant Slice
+
+- `normalizedVariant` embeds the current internal normalization model without renaming its fields.
+- `annotationStatus` is currently `complete` or `failed`.
+- `annotationError` is present when VEP annotation fails and currently captures the source, message, and attempted query forms.
+- `basicAnnotation.mostSevereConsequence` comes from VEP `most_severe_consequence`.
+- `basicAnnotation.transcriptConsequences` keeps only RefSeq transcript rows whose `transcript_id` starts with `NM_`.
+- Each retained transcript consequence currently includes `transcriptRefSeq`, `consequenceTerms`, `proteinStart`, `proteinEnd`, `aminoAcids`, and `isManeSelect`.
+- `basicAnnotation.population` collapses co-located allele frequencies into `maxSubpopulationAf`, `maxSubpopulationLabel`, `maxOverallAf`, and `maxOverallLabel`.
+- `computationalAnnotation` is intentionally lean in v1 and currently includes only `cadd` and `phyloP100wayVertebrate`.
+- On annotation failure, the API still returns `AnnotatedVariant` with `normalizedVariant` populated, `annotationStatus="failed"`, `annotationError` populated, and both annotation sections set to `null`.
 
 ## Evidence Pipelines
 
@@ -60,7 +75,7 @@
 - Likely to replace: LLM and RAG orchestration, older normalization flow, outdated MaveDB scoring assumptions, non-FHIR output surfaces
 - Migration strategy: treat the old repository as a source of reusable modules rather than as the base architecture for the new service
 
-## Small Starter Structure
+## Illustrative Future Structure
 
 ```text
 oncogenicity-predictor/
@@ -101,6 +116,8 @@ oncogenicity-predictor/
 └── README.md
 ```
 
+This section is aspirational rather than a verbatim snapshot of the current repo layout.
+
 ## Near-Term Questions
 
 1. How strict should HGVS validation become before calling ClinGen?
@@ -120,6 +137,7 @@ The current internal normalization target is intentionally permissive.
 - Optional: `geneNCBI_id`
 - Optional: all genomic, transcript, protein, and coordinate representations
 - Optional: `protein.civic_profile_name`, which is currently computed locally from `geneSymbol` plus the derived protein short name
+- Optional: `transcript_hgvs.mane_select_b38_source`, currently `clingen` or `vep` when `mane_select_b38` is populated
 
 Notes:
 
@@ -127,5 +145,12 @@ Notes:
 - The current implementation assumes successful normalization returns a `NormalizedVariant`; malformed or unnormalizable input returns an error instead.
 - Normalized genomic, transcript, and protein fields are populated only from NCBI RefSeq accessions: `NC_`, `NM_`, and `NP_`.
 - `representative_transcript_hgvs` is available as a practical fallback when MANE and canonical transcript fields are absent.
+
+## Current Public Response Shape
+
+- Single-variant requests currently return `AnnotatedVariant`.
+- Batch requests currently return `AnnotatedVariantBatchResponse`.
+- Single and batch requests now use the same per-variant success/failure shape.
+- Final FHIR serialization remains a later stage and is not yet implemented.
 
 The object is only created on successful normalization. Failures are handled as errors rather than partial `NormalizedVariant` instances.

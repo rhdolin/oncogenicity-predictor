@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -17,6 +19,7 @@ class GenomicHgvsRepresentations(BaseModel):
 
 class TranscriptHgvsRepresentations(BaseModel):
     mane_select_b38: str | None = None
+    mane_select_b38_source: Literal["clingen", "vep"] | None = None
     canonical_b37: str | None = None
     representative_transcript_hgvs: str | None = None
 
