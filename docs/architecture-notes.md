@@ -5,8 +5,9 @@
 - Framework: FastAPI
 - Deployment target: Render
 - Public contract: single-variant `GET` endpoints and batch `POST`
-- Current response format: internal `AnnotatedVariant` for a single variant and `AnnotatedVariantBatchResponse` for batch results
+- Current response format: `GET /annotateVariant` returns internal `AnnotatedVariant`; prediction endpoints return client-facing evidence/scoring results
 - Target later response format: FHIR `Observation` for a single variant and a FHIR `Bundle` for batch results
+- Target client-facing prediction payload: evidence summary plus final score/classification, without embedding internal `AnnotatedVariant` or `NormalizedVariant` objects
 - Scope: deterministic service implementation of the scoring approach described in https://pmc.ncbi.nlm.nih.gov/articles/PMC9081216/
 
 ## High-Level Flow
@@ -23,9 +24,9 @@
 
 - The deployed API has already been validated on Render.
 - The current non-stub implementation slice is variant normalization plus first-pass annotation.
-- `GET /annotateVariant`, `GET /predictOncogenicity`, and `POST /predictOncogenicity` currently return internal annotation-layer results rather than final FHIR payloads.
+- `GET /annotateVariant` returns the internal annotation-layer result, while `GET /predictOncogenicity` and `POST /predictOncogenicity` now return the first client-facing evidence/scoring result rather than final FHIR payloads.
 - Submitted variants must currently be provided in HGVS format.
-- The route layer calls an orchestration layer, which currently delegates to the ClinGen-backed variant normalizer and then the VEP-backed variant annotator.
+- The route layer calls orchestration entrypoints. The annotation-only flow delegates to the ClinGen-backed variant normalizer and then the VEP-backed variant annotator, while the prediction flow continues through evidence building and score aggregation.
 - `canonical_b37` is currently populated only from a transcript allele that has a `genomeAlignments` entry for `GRCh37`, using the first primary `NM_` HGVS string from that transcript.
 - `representative_transcript_hgvs` is currently populated from the best available NCBI RefSeq transcript in this order: `mane_select_b38`, then `canonical_b37`, then the first `NM_` transcript returned by ClinGen.
 - `mane_select_b38` is populated from ClinGen when available; if ClinGen does not provide MANE Select, the annotation step can backfill it from VEP `hgvsc` on the MANE-marked RefSeq transcript row and mark `mane_select_b38_source` as `vep`.
@@ -46,11 +47,15 @@
 
 ## Evidence Pipelines
 
-- Population data: primarily gnomAD
+- Population data: Ensembl VEP co-located variant frequencies from gnomAD exomes (`gnomade*`) and gnomAD genomes (`gnomadg*`)
 - Functional data: primarily MaveDB
 - Predictive data: VEP and ClinVar
 - Cancer hotspots
 - Computational evidence: initially CADD
+
+The detailed rule specification for these pipelines and the final score layer lives in `docs/evidence-and-scoring.md`.
+
+Client-facing prediction responses should surface any needed provenance through the evidence summary itself rather than by embedding internal normalization or annotation models.
 
 ## Design Principles
 
@@ -84,6 +89,7 @@ oncogenicity-predictor/
 │   ├── api/
 │   │   └── routes.py
 │   ├── models/
+│   │   ├── annotated_variant.py
 │   │   ├── normalized_variant.py
 │   │   └── requests.py
 │   ├── services/
@@ -111,6 +117,7 @@ oncogenicity-predictor/
 ├── tests/
 ├── docs/
 │   └── architecture-notes.md
+│   └── evidence-and-scoring.md
 ├── requirements.txt
 ├── render.yaml
 └── README.md
@@ -148,10 +155,11 @@ Notes:
 
 ## Current Public Response Shape
 
-- Single-variant requests currently return `AnnotatedVariant`.
+- `GET /annotateVariant` currently returns `AnnotatedVariant`.
 - `GET /annotateVariant` is the explicit annotation-oriented single-variant endpoint.
-- Batch requests currently return `AnnotatedVariantBatchResponse`.
-- Single and batch requests now use the same per-variant success/failure shape.
+- Prediction endpoints currently return a single FHIR Observation-style object with an overall score plus one component per evidence pipeline.
+- Batch prediction requests currently return an `observations` list of those prediction objects.
+- Prediction success/failure is currently expressed through component-level values versus `dataAbsentReason`, rather than by embedding the internal annotation result.
 - Final FHIR serialization remains a later stage and is not yet implemented.
 
 The object is only created on successful normalization. Failures are handled as errors rather than partial `NormalizedVariant` instances.

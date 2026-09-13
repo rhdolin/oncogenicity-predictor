@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 import pytest
+from datetime import datetime
 
 from app.main import app
 from app.services.annotation import variant_annotator
@@ -116,6 +117,14 @@ VEP_SAMPLE_RECORD = {
 client = TestClient(app)
 
 
+def _component_by_code(body: dict, code: str) -> dict:
+    return next(
+        component
+        for component in body["component"]
+        if component["code"]["coding"][0]["code"] == code
+    )
+
+
 @pytest.fixture(autouse=True)
 def stub_clingen_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_fetch_allele_registry_record(submitted_variant: str) -> dict:
@@ -141,7 +150,7 @@ def test_root_exposes_docs() -> None:
     assert response.json()["docs"] == "/docs"
 
 
-def test_predict_single_returns_annotated_variant() -> None:
+def test_predict_single_returns_observation() -> None:
     response = client.get(
         "/predictOncogenicity",
         params={"variant": "NM_004119.3:c.2073T>G"},
@@ -149,31 +158,49 @@ def test_predict_single_returns_annotated_variant() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["normalizedVariant"]["submitted_variant"] == "NM_004119.3:c.2073T>G"
-    assert body["normalizedVariant"]["identifiers"]["caid"] == "CA16602564"
-    assert body["normalizedVariant"]["geneSymbol"] == "FLT3"
-    assert body["normalizedVariant"]["geneNCBI_id"] == 2322
-    assert body["normalizedVariant"]["genomic_hgvs"]["GRCh38"] == "NC_000013.11:g.28027222A>C"
-    assert body["normalizedVariant"]["transcript_hgvs"]["mane_select_b38_source"] == "clingen"
-    assert body["normalizedVariant"]["transcript_hgvs"]["canonical_b37"] == "NM_004119.3:c.2073T>G"
-    assert body["normalizedVariant"]["transcript_hgvs"]["representative_transcript_hgvs"] == "NM_004119.3:c.2073T>G"
-    assert body["normalizedVariant"]["protein"]["hgvs_1letter"] == "p.F691L"
-    assert body["annotationStatus"] == "complete"
-    assert body["annotationError"] is None
-    assert body["basicAnnotation"]["mostSevereConsequence"] == "missense_variant"
-    assert body["basicAnnotation"]["transcriptConsequences"] == [
+    assert body["resourceType"] == "Observation"
+    assert body["status"] == "final"
+    assert body["issued"].endswith("Z")
+    datetime.fromisoformat(body["issued"].replace("Z", "+00:00"))
+    assert body["code"]["coding"][0]["code"] == "oncogenicity-prediction"
+    assert body["valueInteger"] == 1
+    assert body["interpretation"] == []
+    assert body["derivedFrom"] == [
         {
-            "transcriptRefSeq": "NM_004119.3",
-            "consequenceTerms": ["missense_variant"],
-            "proteinStart": 691,
-            "proteinEnd": 691,
-            "aminoAcids": "F/L",
-            "isManeSelect": True,
+            "reference": "NM_004119.3:c.2073T>G",
+            "display": "NM_004119.3:c.2073T>G",
         }
     ]
-    assert body["basicAnnotation"]["population"]["maxSubpopulationLabel"] == "gnomade_nfe"
-    assert body["computationalAnnotation"]["cadd"]["phred"] == 25.3
-    assert body["computationalAnnotation"]["phyloP100wayVertebrate"] == 7.89
+
+    population = _component_by_code(body, "population-evidence")
+    assert population["valueInteger"] == 1
+    assert population["interpretation"] == [
+        {
+            "coding": [
+                {
+                    "system": "https://oncogenicity-predictor.example/fhir/CodeSystem/temp-codes",
+                    "code": "OP4",
+                    "display": "OP4",
+                }
+            ],
+            "text": "Present at low frequency in gnomAD (≤1%; observed 0.02%).",
+        }
+    ]
+    assert "dataAbsentReason" not in population
+
+    computational = _component_by_code(body, "computational-evidence")
+    assert "valueInteger" not in computational
+    assert computational["interpretation"] == []
+    assert computational["dataAbsentReason"]["coding"][0]["code"] == "unsupported"
+
+    hotspots = _component_by_code(body, "hotspots-evidence")
+    assert hotspots["dataAbsentReason"]["coding"][0]["code"] == "unsupported"
+
+    predictive = _component_by_code(body, "predictive-evidence")
+    assert predictive["dataAbsentReason"]["coding"][0]["code"] == "unsupported"
+
+    functional = _component_by_code(body, "functional-evidence")
+    assert functional["dataAbsentReason"]["coding"][0]["code"] == "unsupported"
 
 
 def test_annotate_single_returns_annotated_variant() -> None:
@@ -189,7 +216,7 @@ def test_annotate_single_returns_annotated_variant() -> None:
     assert body["basicAnnotation"]["mostSevereConsequence"] == "missense_variant"
 
 
-def test_predict_batch_returns_annotated_variants() -> None:
+def test_predict_batch_returns_observations() -> None:
     response = client.post(
         "/predictOncogenicity",
         json={"variants": ["NM_004119.3:c.2073T>G", "ENST00000241453.12:c.2073T>G"]},
@@ -197,9 +224,10 @@ def test_predict_batch_returns_annotated_variants() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert len(body["annotated_variants"]) == 2
-    assert body["annotated_variants"][1]["normalizedVariant"]["submitted_variant"] == "ENST00000241453.12:c.2073T>G"
-    assert body["annotated_variants"][1]["annotationStatus"] == "complete"
+    assert len(body["observations"]) == 2
+    assert body["observations"][0]["valueInteger"] == 1
+    assert body["observations"][1]["valueInteger"] == 1
+    assert body["observations"][1]["derivedFrom"][0]["reference"] == "ENST00000241453.12:c.2073T>G"
 
 
 def test_non_refseq_protein_effect_is_not_used() -> None:
@@ -489,18 +517,20 @@ def test_predict_single_returns_failed_annotation_payload_when_vep_fails() -> No
 
     assert response.status_code == 200
     body = response.json()
-    assert body["normalizedVariant"]["submitted_variant"] == "NM_004119.3:c.2073T>G"
-    assert body["annotationStatus"] == "failed"
-    assert body["annotationError"] == {
-        "source": "vep",
-        "message": "VEP annotation failed for all supported query forms.",
-        "attemptedQueries": [
-            "NC_000013.11:g.28027222A>C",
-            "NM_004119.3:c.2073T>G",
+    assert body["valueInteger"] == 0
+    population = _component_by_code(body, "population-evidence")
+    assert "valueInteger" not in population
+    assert population["interpretation"] == []
+    assert population["dataAbsentReason"] == {
+        "coding": [
+            {
+                "system": "http://terminology.hl7.org/CodeSystem/data-absent-reason",
+                "code": "error",
+                "display": "error",
+            }
         ],
+        "text": "Population evidence could not be evaluated because annotation data was unavailable.",
     }
-    assert body["basicAnnotation"] is None
-    assert body["computationalAnnotation"] is None
 
 
 def test_annotate_single_returns_failed_annotation_payload_when_vep_fails() -> None:
@@ -562,10 +592,77 @@ def test_predict_batch_returns_mixed_success_and_failed_annotation_payloads() ->
 
     assert response.status_code == 200
     body = response.json()
-    assert body["annotated_variants"][0]["annotationStatus"] == "complete"
-    assert body["annotated_variants"][1]["annotationStatus"] == "failed"
-    assert body["annotated_variants"][1]["basicAnnotation"] is None
-    assert body["annotated_variants"][1]["computationalAnnotation"] is None
+    first_population = _component_by_code(body["observations"][0], "population-evidence")
+    second_population = _component_by_code(body["observations"][1], "population-evidence")
+    assert first_population["valueInteger"] == 1
+    assert second_population["dataAbsentReason"]["coding"][0]["code"] == "error"
+
+
+def test_predict_single_returns_op4_when_population_data_is_missing() -> None:
+    no_population_record = {
+        **VEP_SAMPLE_RECORD,
+        "colocated_variants": [],
+    }
+
+    monkeypatch_context = pytest.MonkeyPatch()
+    monkeypatch_context.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: no_population_record,
+    )
+    try:
+        response = client.get(
+            "/predictOncogenicity",
+            params={"variant": "NM_004119.3:c.2073T>G"},
+        )
+    finally:
+        monkeypatch_context.undo()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valueInteger"] == 1
+    population = _component_by_code(body, "population-evidence")
+    assert population["valueInteger"] == 1
+    assert population["interpretation"][0]["coding"][0]["code"] == "OP4"
+    assert population["interpretation"][0]["text"] == "Absent from gnomAD controls."
+
+
+def test_predict_single_returns_sbvs1_for_high_population_frequency() -> None:
+    high_population_record = {
+        **VEP_SAMPLE_RECORD,
+        "colocated_variants": [
+            {
+                "frequencies": {
+                    "C": {
+                        "gnomade_nfe": 0.054,
+                        "gnomade": 0.041,
+                        "gnomadg": 0.039,
+                    }
+                }
+            }
+        ],
+    }
+
+    monkeypatch_context = pytest.MonkeyPatch()
+    monkeypatch_context.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: high_population_record,
+    )
+    try:
+        response = client.get(
+            "/predictOncogenicity",
+            params={"variant": "NM_004119.3:c.2073T>G"},
+        )
+    finally:
+        monkeypatch_context.undo()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valueInteger"] == -8
+    population = _component_by_code(body, "population-evidence")
+    assert population["valueInteger"] == -8
+    assert population["interpretation"][0]["coding"][0]["code"] == "SBVS1"
 
 
 def test_chr_x_and_chr_y_use_numeric_chrom_num() -> None:
