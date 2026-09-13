@@ -39,7 +39,9 @@ def _predict_variant_or_raise(submitted_variant: str) -> OncogenicityObservation
         "Accepts one submitted variant in HGVS format, normalizes it through the "
         "ClinGen Allele Registry, annotates it through Ensembl VEP, evaluates "
         "the currently implemented evidence pipelines, and returns a single "
-        "FHIR Observation-style prediction object."
+        "FHIR Observation-style prediction object with `issued`, a custom "
+        "extension carrying the submitted variant, an overall score, "
+        "and one component per evidence pipeline."
     ),
 )
 def predict_single(
@@ -82,8 +84,8 @@ def annotate_single(
         "through ClinGen, annotates each one through Ensembl VEP, evaluates the "
         "currently implemented evidence pipelines, and returns a list of "
         "FHIR Observation-style prediction objects. Variants with annotation "
-        "failures are returned in-band as partial observations rather than "
-        "failing the whole batch."
+        "failures are returned in-band as partial observations with pipeline "
+        "`dataAbsentReason` values rather than failing the whole batch."
     ),
 )
 def predict_batch(request: BatchRequest) -> OncogenicityPredictionBatchResponse:

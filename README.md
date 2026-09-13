@@ -1,6 +1,6 @@
 # Oncogenicity Predictor
 
-This repository currently contains a minimal FastAPI service for validating local startup, Render deployment, and the first normalization-plus-annotation slice of the oncogenicity pipeline.
+This repository currently contains a minimal FastAPI service for validating local startup, Render deployment, normalization, annotation, the first evidence pipeline, and an initial FHIR Observation-style prediction output.
 
 ## Endpoints
 
@@ -42,8 +42,8 @@ After deployment, the interactive API docs should be available at `/docs` on the
 
 This is an incremental implementation.
 
-- Current behavior: ClinGen-backed normalization, Ensembl VEP annotation, population evidence scoring, and client-facing prediction output for the prediction endpoints
-- Planned later behavior: additional evidence pipelines, richer scoring/classification, and final FHIR `Observation` or `Bundle` responses
+- Current behavior: ClinGen-backed normalization, Ensembl VEP annotation, population evidence scoring, and single-Observation prediction output for the prediction endpoints
+- Planned later behavior: additional evidence pipelines, richer scoring/classification, and batch FHIR `Bundle` responses
 
 At the moment, the normalization and annotation path requires submitted variants to be in HGVS format.
 
@@ -72,7 +72,7 @@ Current annotation behavior includes:
 The current prediction payload from `GET /predictOncogenicity` and `POST /predictOncogenicity` includes:
 
 - top-level `Observation.issued` for the prediction timestamp
-- top-level `Observation.derivedFrom` with a temporary string reference to the submitted variant
+- top-level `Observation.extension` carrying the submitted variant HGVS string
 - top-level `Observation.valueInteger` for the overall score
 - top-level `Observation.interpretation`, currently omitted because classification is not yet implemented
 - one `component` per evidence pipeline

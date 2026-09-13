@@ -5,9 +5,9 @@
 - Framework: FastAPI
 - Deployment target: Render
 - Public contract: single-variant `GET` endpoints and batch `POST`
-- Current response format: `GET /annotateVariant` returns internal `AnnotatedVariant`; prediction endpoints return client-facing evidence/scoring results
-- Target later response format: FHIR `Observation` for a single variant and a FHIR `Bundle` for batch results
-- Target client-facing prediction payload: evidence summary plus final score/classification, without embedding internal `AnnotatedVariant` or `NormalizedVariant` objects
+- Current response format: `GET /annotateVariant` returns internal `AnnotatedVariant`; prediction endpoints return a single FHIR Observation-style prediction object
+- Target later response format: keep the single-variant FHIR `Observation` shape and add a FHIR `Bundle` for batch results
+- Target client-facing prediction payload: FHIR Observation content built from evidence summary plus final score/classification, without embedding internal `AnnotatedVariant` or `NormalizedVariant` objects
 - Scope: deterministic service implementation of the scoring approach described in https://pmc.ncbi.nlm.nih.gov/articles/PMC9081216/
 
 ## High-Level Flow
@@ -23,10 +23,10 @@
 ## Current Implementation Slice
 
 - The deployed API has already been validated on Render.
-- The current non-stub implementation slice is variant normalization plus first-pass annotation.
-- `GET /annotateVariant` returns the internal annotation-layer result, while `GET /predictOncogenicity` and `POST /predictOncogenicity` now return the first client-facing evidence/scoring result rather than final FHIR payloads.
+- The current non-stub implementation slice is variant normalization, first-pass annotation, the population evidence pipeline, and initial FHIR Observation rendering.
+- `GET /annotateVariant` returns the internal annotation-layer result, while `GET /predictOncogenicity` and `POST /predictOncogenicity` return FHIR Observation-style prediction payloads.
 - Submitted variants must currently be provided in HGVS format.
-- The route layer calls orchestration entrypoints. The annotation-only flow delegates to the ClinGen-backed variant normalizer and then the VEP-backed variant annotator, while the prediction flow continues through evidence building and score aggregation.
+- The route layer calls orchestration entrypoints. The annotation-only flow delegates to the ClinGen-backed variant normalizer and then the VEP-backed variant annotator, while the prediction flow continues through evidence building, score aggregation, and FHIR Observation mapping.
 - `canonical_b37` is currently populated only from a transcript allele that has a `genomeAlignments` entry for `GRCh37`, using the first primary `NM_` HGVS string from that transcript.
 - `representative_transcript_hgvs` is currently populated from the best available NCBI RefSeq transcript in this order: `mane_select_b38`, then `canonical_b37`, then the first `NM_` transcript returned by ClinGen.
 - `mane_select_b38` is populated from ClinGen when available; if ClinGen does not provide MANE Select, the annotation step can backfill it from VEP `hgvsc` on the MANE-marked RefSeq transcript row and mark `mane_select_b38_source` as `vep`.
@@ -61,7 +61,7 @@ Client-facing prediction responses should surface any needed provenance through 
 
 - Normalize once, early, and keep a canonical internal variant representation.
 - Keep source-specific client code separate from evidence interpretation.
-- Keep scoring separate from HTTP and FHIR serialization.
+- Keep scoring separate from HTTP and from the dedicated FHIR serialization layer.
 - Treat partial evidence availability as a normal case rather than a fatal error.
 - Preserve provenance for evidence and final scoring decisions.
 - Only instantiate `NormalizedVariant` on successful normalization.
@@ -128,7 +128,7 @@ This section is aspirational rather than a verbatim snapshot of the current repo
 ## Near-Term Questions
 
 1. How strict should HGVS validation become before calling ClinGen?
-2. What are the minimum FHIR fields guaranteed in every response?
+2. Which additional FHIR fields beyond the current Observation skeleton should be locked before more pipelines land?
 3. Which score output is authoritative for evaluation: numeric score, discrete class, or both?
 4. Which pieces of `llm-oncogenicity` are worth migrating first?
 
@@ -157,9 +157,9 @@ Notes:
 
 - `GET /annotateVariant` currently returns `AnnotatedVariant`.
 - `GET /annotateVariant` is the explicit annotation-oriented single-variant endpoint.
-- Prediction endpoints currently return a single FHIR Observation-style object with an overall score plus one component per evidence pipeline.
+- Prediction endpoints currently return a single FHIR Observation-style object with `issued`, a custom extension carrying the submitted variant HGVS string, an overall score, and one component per evidence pipeline.
 - Batch prediction requests currently return an `observations` list of those prediction objects.
 - Prediction success/failure is currently expressed through component-level values versus `dataAbsentReason`, rather than by embedding the internal annotation result.
-- Final FHIR serialization remains a later stage and is not yet implemented.
+- FHIR rendering currently lives in `app/services/fhir/observation_builder.py` and is intentionally lightweight rather than profile-complete.
 
 The object is only created on successful normalization. Failures are handled as errors rather than partial `NormalizedVariant` instances.

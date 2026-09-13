@@ -41,16 +41,16 @@ class CodeableConcept(BaseModel):
     text: str | None = None
 
 
+class Extension(BaseModel):
+    url: str
+    valueString: str | None = None
+
+
 class ObservationComponent(BaseModel):
     code: CodeableConcept
     valueInteger: int | None = None
     interpretation: list[CodeableConcept] = Field(default_factory=list)
     dataAbsentReason: CodeableConcept | None = None
-
-
-class Reference(BaseModel):
-    reference: str | None = None
-    display: str | None = None
 
 
 class OncogenicityObservation(BaseModel):
@@ -60,7 +60,7 @@ class OncogenicityObservation(BaseModel):
     code: CodeableConcept
     valueInteger: int
     interpretation: list[CodeableConcept] = Field(default_factory=list)
-    derivedFrom: list[Reference] = Field(default_factory=list)
+    extension: list[Extension] = Field(default_factory=list)
     component: list[ObservationComponent] = Field(default_factory=list)
 
 

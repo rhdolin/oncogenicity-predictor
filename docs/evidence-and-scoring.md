@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document is the working specification for the oncogenicity evidence pipelines and the final score aggregation layer.
+This document is the working specification for the oncogenicity evidence pipelines, the final score aggregation layer, and the current single-Observation prediction rendering.
 
 - The architecture document describes where evidence and scoring fit in the system.
 - This document defines the rule logic and response intent for each pipeline.
@@ -42,7 +42,7 @@ Working meanings for the additional fields:
 - `source`: the immediate source used by the pipeline, such as `vep`, `clinvar`, `cancerhotspots`, or `mavedb`
 - `matchedData`: the structured values that drove the result so the rule is auditable without parsing free text
 
-The exact enum values are not yet locked, but this document assumes the distinction between rule outcome and pipeline availability will be preserved.
+The exact enum values are now partially locked for the current implementation: `applied` and `not_available` are both in use, and the distinction between rule outcome and pipeline availability is preserved.
 
 ## Population Pipeline
 
@@ -258,7 +258,7 @@ Current rendering intent:
 
 - `Observation.code`: temporary code for oncogenicity prediction
 - `Observation.issued`: timestamp when the service generated the prediction
-- `Observation.derivedFrom`: temporary reference carrying the originally submitted variant string
+- `Observation.extension`: custom extension carrying the originally submitted variant string in `valueString`
 - `Observation.valueInteger`: overall numeric score
 - `Observation.interpretation`: overall classification when available
 - one `Observation.component` per evidence pipeline
@@ -267,6 +267,11 @@ Current rendering intent:
 - `component.interpretation.coding.code`: pipeline evidence code such as `OP4`, `SBS1`, or `SBVS1`
 - `component.interpretation.text`: short clinician-facing evidence statement
 - `component.dataAbsentReason`: present instead of `component.valueInteger` when a pipeline is unavailable
+
+Current serialization note:
+
+- prediction endpoints omit `null` fields from the JSON response
+- defaulted fields such as `resourceType="Observation"` and `status="final"` are still emitted
 
 The final client-facing result should not embed `AnnotatedVariant` or `NormalizedVariant`.
 

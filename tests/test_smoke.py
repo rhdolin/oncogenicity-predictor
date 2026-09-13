@@ -165,10 +165,10 @@ def test_predict_single_returns_observation() -> None:
     assert body["code"]["coding"][0]["code"] == "oncogenicity-prediction"
     assert body["valueInteger"] == 1
     assert body["interpretation"] == []
-    assert body["derivedFrom"] == [
+    assert body["extension"] == [
         {
-            "reference": "NM_004119.3:c.2073T>G",
-            "display": "NM_004119.3:c.2073T>G",
+            "url": "https://oncogenicity-predictor.example/fhir/StructureDefinition/submitted-variant",
+            "valueString": "NM_004119.3:c.2073T>G",
         }
     ]
 
@@ -227,7 +227,7 @@ def test_predict_batch_returns_observations() -> None:
     assert len(body["observations"]) == 2
     assert body["observations"][0]["valueInteger"] == 1
     assert body["observations"][1]["valueInteger"] == 1
-    assert body["observations"][1]["derivedFrom"][0]["reference"] == "ENST00000241453.12:c.2073T>G"
+    assert body["observations"][1]["extension"][0]["valueString"] == "ENST00000241453.12:c.2073T>G"
 
 
 def test_non_refseq_protein_effect_is_not_used() -> None:

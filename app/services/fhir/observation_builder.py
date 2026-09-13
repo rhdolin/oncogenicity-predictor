@@ -4,15 +4,18 @@ from app.models.prediction import (
     CodeableConcept,
     Coding,
     EvidenceResult,
+    Extension,
     ObservationComponent,
     OncogenicityObservation,
     OncogenicityPredictionSummary,
-    Reference,
 )
 
 
 TEMP_CODE_SYSTEM = "https://oncogenicity-predictor.example/fhir/CodeSystem/temp-codes"
 DATA_ABSENT_REASON_SYSTEM = "http://terminology.hl7.org/CodeSystem/data-absent-reason"
+SUBMITTED_VARIANT_EXTENSION_URL = (
+    "https://oncogenicity-predictor.example/fhir/StructureDefinition/submitted-variant"
+)
 
 
 def _build_concept(
@@ -88,7 +91,12 @@ def build_oncogenicity_observation(
         ),
         valueInteger=summary.overallScore,
         interpretation=interpretation,
-        derivedFrom=[Reference(reference=submitted_variant, display=submitted_variant)],
+        extension=[
+            Extension(
+                url=SUBMITTED_VARIANT_EXTENSION_URL,
+                valueString=submitted_variant,
+            )
+        ],
         component=[
             _build_pipeline_component("population", summary.oncogenicityEvidence.population),
             _build_pipeline_component(

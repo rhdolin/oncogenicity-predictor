@@ -8,11 +8,12 @@ app = FastAPI(
     description=(
         "Prototype API for oncogenicity prediction. The current implementation "
         "normalizes submitted variants through ClinGen, annotates them through "
-        "Ensembl VEP, and returns a single FHIR Observation-style prediction "
-        "response for the prediction endpoints. Submitted variants must "
-        "currently be provided in HGVS format. When VEP annotation fails, the "
-        "prediction endpoints still return partial observations instead of "
-        "failing the whole request."
+        "Ensembl VEP, evaluates the currently implemented evidence pipelines, "
+        "and returns a single FHIR Observation-style prediction response for "
+        "the prediction endpoints. Submitted variants must currently be "
+        "provided in HGVS format. When VEP annotation fails, the prediction "
+        "endpoints still return partial observations with component-level data "
+        "absent reasons instead of failing the whole request."
     ),
     version="0.1.0",
 )
