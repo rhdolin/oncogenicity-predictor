@@ -37,6 +37,27 @@ def predict_single(
     return _annotate_variant_or_raise(variant)
 
 
+@router.get(
+    "/annotateVariant",
+    response_model=AnnotatedVariant,
+    summary="Annotate a single variant",
+    description=(
+        "Accepts one submitted variant in HGVS format, normalizes it through the "
+        "ClinGen Allele Registry, annotates it through Ensembl VEP, and returns "
+        "the internal AnnotatedVariant JSON shape. If annotation fails, the "
+        "response still returns NormalizedVariant data plus annotation failure "
+        "metadata."
+    ),
+)
+def annotate_single(
+    variant: str = Query(
+        description="Variant to annotate. Must be provided in HGVS format.",
+        examples=["NM_004119.3:c.2073T>G"],
+    ),
+) -> AnnotatedVariant:
+    return _annotate_variant_or_raise(variant)
+
+
 @router.post(
     "/predictOncogenicity",
     response_model=AnnotatedVariantBatchResponse,

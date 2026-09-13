@@ -6,10 +6,12 @@ This repository currently contains a minimal FastAPI service for validating loca
 
 - `GET /`
 - `GET /health`
+- `GET /annotateVariant?variant=NM_004119.3%3Ac.2073T%3EG`
 - `GET /predictOncogenicity?variant=NM_004119.3%3Ac.2073T%3EG`
 - `POST /predictOncogenicity`
 - `GET /docs`
 
+The current `GET /annotateVariant` endpoint accepts a single variant in HGVS format, normalizes it through ClinGen, annotates it through Ensembl VEP, and returns the internal `AnnotatedVariant` JSON shape.
 The current `GET /predictOncogenicity` endpoint accepts a single variant in HGVS format, normalizes it through ClinGen, annotates it through Ensembl VEP, and returns the internal `AnnotatedVariant` JSON shape.
 The current `POST /predictOncogenicity` endpoint accepts a list of variants in HGVS format and returns a list of annotated variants in the same internal shape.
 If VEP annotation fails for a variant, the API still returns that variant's `AnnotatedVariant` with `annotationStatus="failed"`, `annotationError` populated, and annotation payload sections set to `null`.

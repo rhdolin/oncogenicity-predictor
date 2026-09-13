@@ -176,6 +176,19 @@ def test_predict_single_returns_annotated_variant() -> None:
     assert body["computationalAnnotation"]["phyloP100wayVertebrate"] == 7.89
 
 
+def test_annotate_single_returns_annotated_variant() -> None:
+    response = client.get(
+        "/annotateVariant",
+        params={"variant": "NM_004119.3:c.2073T>G"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["normalizedVariant"]["submitted_variant"] == "NM_004119.3:c.2073T>G"
+    assert body["annotationStatus"] == "complete"
+    assert body["basicAnnotation"]["mostSevereConsequence"] == "missense_variant"
+
+
 def test_predict_batch_returns_annotated_variants() -> None:
     response = client.post(
         "/predictOncogenicity",
@@ -486,6 +499,37 @@ def test_predict_single_returns_failed_annotation_payload_when_vep_fails() -> No
             "NM_004119.3:c.2073T>G",
         ],
     }
+    assert body["basicAnnotation"] is None
+    assert body["computationalAnnotation"] is None
+
+
+def test_annotate_single_returns_failed_annotation_payload_when_vep_fails() -> None:
+    monkeypatch_context = pytest.MonkeyPatch()
+    monkeypatch_context.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: (_ for _ in ()).throw(
+            variant_annotator.VariantAnnotationError(
+                "VEP annotation failed for all supported query forms.",
+                [
+                    "NC_000013.11:g.28027222A>C",
+                    "NM_004119.3:c.2073T>G",
+                ],
+            )
+        ),
+    )
+    try:
+        response = client.get(
+            "/annotateVariant",
+            params={"variant": "NM_004119.3:c.2073T>G"},
+        )
+    finally:
+        monkeypatch_context.undo()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["normalizedVariant"]["submitted_variant"] == "NM_004119.3:c.2073T>G"
+    assert body["annotationStatus"] == "failed"
     assert body["basicAnnotation"] is None
     assert body["computationalAnnotation"] is None
 

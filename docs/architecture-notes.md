@@ -4,7 +4,7 @@
 
 - Framework: FastAPI
 - Deployment target: Render
-- Public contract: single-variant `GET` and batch `POST`
+- Public contract: single-variant `GET` endpoints and batch `POST`
 - Current response format: internal `AnnotatedVariant` for a single variant and `AnnotatedVariantBatchResponse` for batch results
 - Target later response format: FHIR `Observation` for a single variant and a FHIR `Bundle` for batch results
 - Scope: deterministic service implementation of the scoring approach described in https://pmc.ncbi.nlm.nih.gov/articles/PMC9081216/
@@ -23,7 +23,7 @@
 
 - The deployed API has already been validated on Render.
 - The current non-stub implementation slice is variant normalization plus first-pass annotation.
-- `GET /predictOncogenicity` and `POST /predictOncogenicity` currently return internal `AnnotatedVariant` results rather than final FHIR payloads.
+- `GET /annotateVariant`, `GET /predictOncogenicity`, and `POST /predictOncogenicity` currently return internal annotation-layer results rather than final FHIR payloads.
 - Submitted variants must currently be provided in HGVS format.
 - The route layer calls an orchestration layer, which currently delegates to the ClinGen-backed variant normalizer and then the VEP-backed variant annotator.
 - `canonical_b37` is currently populated only from a transcript allele that has a `genomeAlignments` entry for `GRCh37`, using the first primary `NM_` HGVS string from that transcript.
@@ -149,6 +149,7 @@ Notes:
 ## Current Public Response Shape
 
 - Single-variant requests currently return `AnnotatedVariant`.
+- `GET /annotateVariant` is the explicit annotation-oriented single-variant endpoint.
 - Batch requests currently return `AnnotatedVariantBatchResponse`.
 - Single and batch requests now use the same per-variant success/failure shape.
 - Final FHIR serialization remains a later stage and is not yet implemented.
