@@ -90,6 +90,9 @@ VEP_SAMPLE_RECORD = {
             "amino_acids": "F/L",
             "cadd_phred": 25.3,
             "cadd_raw": 4.12,
+            "fathmm-xf_coding_pred": "D",
+            "fathmm-xf_coding_score": 0.88,
+            "fathmm-xf_coding_rankscore": 0.91,
             "phylop100way_vertebrate": 7.89,
             "gene_symbol": "FLT3",
         },
@@ -163,7 +166,7 @@ def test_predict_single_returns_observation() -> None:
     assert body["issued"].endswith("Z")
     datetime.fromisoformat(body["issued"].replace("Z", "+00:00"))
     assert body["code"]["coding"][0]["code"] == "oncogenicity-prediction"
-    assert body["valueInteger"] == 1
+    assert body["valueInteger"] == 2
     assert body["interpretation"] == []
     assert body["extension"] == [
         {
@@ -189,9 +192,12 @@ def test_predict_single_returns_observation() -> None:
     assert "dataAbsentReason" not in population
 
     computational = _component_by_code(body, "computational-evidence")
-    assert "valueInteger" not in computational
-    assert computational["interpretation"] == []
-    assert computational["dataAbsentReason"]["coding"][0]["code"] == "unsupported"
+    assert computational["valueInteger"] == 1
+    assert computational["interpretation"][0]["coding"][0]["code"] == "OP1"
+    assert computational["interpretation"][0]["text"] == (
+        "CADD supports oncogenicity for this missense variant (PHRED 25.3)."
+    )
+    assert "dataAbsentReason" not in computational
 
     hotspots = _component_by_code(body, "hotspots-evidence")
     assert hotspots["dataAbsentReason"]["coding"][0]["code"] == "unsupported"
@@ -214,6 +220,7 @@ def test_annotate_single_returns_annotated_variant() -> None:
     assert body["normalizedVariant"]["submitted_variant"] == "NM_004119.3:c.2073T>G"
     assert body["annotationStatus"] == "complete"
     assert body["basicAnnotation"]["mostSevereConsequence"] == "missense_variant"
+    assert body["computationalAnnotation"]["fathmmXfCoding"]["prediction"] == "D"
 
 
 def test_predict_batch_returns_observations() -> None:
@@ -225,8 +232,8 @@ def test_predict_batch_returns_observations() -> None:
     assert response.status_code == 200
     body = response.json()
     assert len(body["observations"]) == 2
-    assert body["observations"][0]["valueInteger"] == 1
-    assert body["observations"][1]["valueInteger"] == 1
+    assert body["observations"][0]["valueInteger"] == 2
+    assert body["observations"][1]["valueInteger"] == 2
     assert body["observations"][1]["extension"][0]["valueString"] == "ENST00000241453.12:c.2073T>G"
 
 
@@ -531,6 +538,17 @@ def test_predict_single_returns_failed_annotation_payload_when_vep_fails() -> No
         ],
         "text": "Population evidence could not be evaluated because annotation data was unavailable.",
     }
+    computational = _component_by_code(body, "computational-evidence")
+    assert computational["dataAbsentReason"] == {
+        "coding": [
+            {
+                "system": "http://terminology.hl7.org/CodeSystem/data-absent-reason",
+                "code": "error",
+                "display": "error",
+            }
+        ],
+        "text": "Computational evidence could not be evaluated because annotation data was unavailable.",
+    }
 
 
 def test_annotate_single_returns_failed_annotation_payload_when_vep_fails() -> None:
@@ -620,11 +638,90 @@ def test_predict_single_returns_op4_when_population_data_is_missing() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["valueInteger"] == 1
+    assert body["valueInteger"] == 2
     population = _component_by_code(body, "population-evidence")
     assert population["valueInteger"] == 1
     assert population["interpretation"][0]["coding"][0]["code"] == "OP4"
     assert population["interpretation"][0]["text"] == "Absent from gnomAD controls."
+
+
+def test_predict_single_returns_sbp1_for_low_cadd_and_benign_fathmm_xf() -> None:
+    low_cadd_benign_record = {
+        **VEP_SAMPLE_RECORD,
+        "transcript_consequences": [
+            {
+                **VEP_SAMPLE_RECORD["transcript_consequences"][0],
+                "cadd_phred": 10.4,
+                "cadd_raw": 0.42,
+                "fathmm-xf_coding_pred": "N",
+                "fathmm-xf_coding_score": 0.12,
+                "fathmm-xf_coding_rankscore": 0.08,
+            },
+            VEP_SAMPLE_RECORD["transcript_consequences"][1],
+        ],
+    }
+
+    monkeypatch_context = pytest.MonkeyPatch()
+    monkeypatch_context.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: low_cadd_benign_record,
+    )
+    try:
+        response = client.get(
+            "/predictOncogenicity",
+            params={"variant": "NM_004119.3:c.2073T>G"},
+        )
+    finally:
+        monkeypatch_context.undo()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valueInteger"] == 0
+    computational = _component_by_code(body, "computational-evidence")
+    assert computational["valueInteger"] == -1
+    assert computational["interpretation"][0]["coding"][0]["code"] == "SBP1"
+
+
+def test_predict_single_does_not_apply_sbp1_outside_missense() -> None:
+    non_missense_record = {
+        **VEP_SAMPLE_RECORD,
+        "most_severe_consequence": "synonymous_variant",
+        "transcript_consequences": [
+            {
+                **VEP_SAMPLE_RECORD["transcript_consequences"][0],
+                "consequence_terms": ["synonymous_variant"],
+                "cadd_phred": 10.4,
+                "fathmm-xf_coding_pred": "N",
+            },
+            VEP_SAMPLE_RECORD["transcript_consequences"][1],
+        ],
+    }
+
+    monkeypatch_context = pytest.MonkeyPatch()
+    monkeypatch_context.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: non_missense_record,
+    )
+    try:
+        response = client.get(
+            "/predictOncogenicity",
+            params={"variant": "NM_004119.3:c.2073T>G"},
+        )
+    finally:
+        monkeypatch_context.undo()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valueInteger"] == 1
+    computational = _component_by_code(body, "computational-evidence")
+    assert computational["valueInteger"] == 0
+    assert computational["interpretation"][0]["coding"] == []
+    assert computational["interpretation"][0]["text"] == (
+        "Computational missense rules were not applicable because the most severe consequence "
+        "was synonymous_variant."
+    )
 
 
 def test_predict_single_returns_sbvs1_for_high_population_frequency() -> None:
@@ -659,7 +756,7 @@ def test_predict_single_returns_sbvs1_for_high_population_frequency() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["valueInteger"] == -8
+    assert body["valueInteger"] == -7
     population = _component_by_code(body, "population-evidence")
     assert population["valueInteger"] == -8
     assert population["interpretation"][0]["coding"][0]["code"] == "SBVS1"

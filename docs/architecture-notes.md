@@ -23,7 +23,7 @@
 ## Current Implementation Slice
 
 - The deployed API has already been validated on Render.
-- The current non-stub implementation slice is variant normalization, first-pass annotation, the population evidence pipeline, and initial FHIR Observation rendering.
+- The current non-stub implementation slice is variant normalization, first-pass annotation, the population and computational evidence pipelines, and initial FHIR Observation rendering.
 - `GET /annotateVariant` returns the internal annotation-layer result, while `GET /predictOncogenicity` and `POST /predictOncogenicity` return FHIR Observation-style prediction payloads.
 - Submitted variants must currently be provided in HGVS format.
 - The route layer calls orchestration entrypoints. The annotation-only flow delegates to the ClinGen-backed variant normalizer and then the VEP-backed variant annotator, while the prediction flow continues through evidence building, score aggregation, and FHIR Observation mapping.
@@ -42,7 +42,7 @@
 - `basicAnnotation.transcriptConsequences` keeps only RefSeq transcript rows whose `transcript_id` starts with `NM_`.
 - Each retained transcript consequence currently includes `transcriptRefSeq`, `consequenceTerms`, `proteinStart`, `proteinEnd`, `aminoAcids`, and `isManeSelect`.
 - `basicAnnotation.population` collapses co-located allele frequencies into `maxSubpopulationAf`, `maxSubpopulationLabel`, `maxOverallAf`, and `maxOverallLabel`.
-- `computationalAnnotation` is intentionally lean in v1 and currently includes only `cadd` and `phyloP100wayVertebrate`.
+- `computationalAnnotation` is intentionally lean in v1 and currently includes `cadd`, `phyloP100wayVertebrate`, and `fathmmXfCoding`.
 - On annotation failure, the API still returns `AnnotatedVariant` with `normalizedVariant` populated, `annotationStatus="failed"`, `annotationError` populated, and both annotation sections set to `null`.
 
 ## Evidence Pipelines
@@ -51,7 +51,7 @@
 - Functional data: primarily MaveDB
 - Predictive data: VEP and ClinVar
 - Cancer hotspots
-- Computational evidence: initially CADD
+- Computational evidence: missense-only `CADD` plus `FATHMM-XF` concordance
 
 The detailed rule specification for these pipelines and the final score layer lives in `docs/evidence-and-scoring.md`.
 

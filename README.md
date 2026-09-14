@@ -1,6 +1,6 @@
 # Oncogenicity Predictor
 
-This repository currently contains a minimal FastAPI service for validating local startup, Render deployment, normalization, annotation, the first evidence pipeline, and an initial FHIR Observation-style prediction output.
+This repository currently contains a minimal FastAPI service for validating local startup, Render deployment, normalization, annotation, the population and computational evidence pipelines, and an initial FHIR Observation-style prediction output.
 
 ## Endpoints
 
@@ -42,7 +42,7 @@ After deployment, the interactive API docs should be available at `/docs` on the
 
 This is an incremental implementation.
 
-- Current behavior: ClinGen-backed normalization, Ensembl VEP annotation, population evidence scoring, and single-Observation prediction output for the prediction endpoints
+- Current behavior: ClinGen-backed normalization, Ensembl VEP annotation, population and computational evidence scoring, and single-Observation prediction output for the prediction endpoints
 - Planned later behavior: additional evidence pipelines, richer scoring/classification, and batch FHIR `Bundle` responses
 
 At the moment, the normalization and annotation path requires submitted variants to be in HGVS format.
@@ -56,6 +56,7 @@ The current annotation payload from `GET /annotateVariant` includes:
 - summarized `basicAnnotation.population`
 - `computationalAnnotation.cadd`
 - `computationalAnnotation.phyloP100wayVertebrate`
+- `computationalAnnotation.fathmmXfCoding`
 
 The embedded normalized payload can include:
 
@@ -79,6 +80,13 @@ The current prediction payload from `GET /predictOncogenicity` and `POST /predic
 - pipeline `component.valueInteger` for available pipeline scores
 - pipeline `component.interpretation` for evidence code plus short evidence statement
 - pipeline `component.dataAbsentReason` for unavailable pipelines
+
+The current computational pipeline is intentionally narrow:
+
+- it only evaluates missense variants
+- `OP1` is applied when `CADD PHRED >= 15`
+- `SBP1` is applied when `CADD PHRED < 15` and `FATHMM-XF` is concordantly benign or neutral
+- `FATHMM-XF` values currently come from Ensembl REST VEP `dbNSFP` fields such as `fathmm-xf_coding_pred`
 
 Coordinate conventions currently used by the normalizer include:
 

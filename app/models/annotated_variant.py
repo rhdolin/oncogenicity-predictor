@@ -32,9 +32,16 @@ class CaddAnnotation(BaseModel):
     raw: float | None = None
 
 
+class FathmmXfCodingAnnotation(BaseModel):
+    prediction: str | None = None
+    score: float | None = None
+    rankscore: float | None = None
+
+
 class ComputationalAnnotation(BaseModel):
     cadd: CaddAnnotation = Field(default_factory=CaddAnnotation)
     phyloP100wayVertebrate: float | None = None
+    fathmmXfCoding: FathmmXfCodingAnnotation = Field(default_factory=FathmmXfCodingAnnotation)
 
 
 class AnnotationError(BaseModel):

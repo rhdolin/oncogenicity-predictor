@@ -8,6 +8,7 @@ from ...models.annotated_variant import (
     BasicAnnotation,
     CaddAnnotation,
     ComputationalAnnotation,
+    FathmmXfCodingAnnotation,
     PopulationSummary,
     TranscriptConsequence,
 )
@@ -16,6 +17,7 @@ from ...models.normalized_variant import NormalizedVariant
 
 VEP_HGVS_URL = "https://rest.ensembl.org/vep/human/hgvs"
 SUBPOPULATION_KEYS = ("afr", "eas", "nfe", "amr", "sas")
+INVALID_PREDICTOR_VALUE = "invalid_field"
 
 
 class VariantAnnotationError(Exception):
@@ -59,6 +61,7 @@ def annotate_variant(normalized_variant: NormalizedVariant) -> AnnotatedVariant:
                 transcript_rows,
                 "phylop100way_vertebrate",
             ),
+            fathmmXfCoding=_extract_fathmm_xf_coding_annotation(transcript_rows),
         ),
     )
 
@@ -74,7 +77,10 @@ def fetch_vep_annotation_record(normalized_variant: NormalizedVariant) -> dict:
                 params={
                     "content-type": "application/json",
                     "CADD": "true",
-                    "dbNSFP": "phyloP100way_vertebrate",
+                    # Ensembl REST currently returns invalid_field for explicit
+                    # hyphenated FATHMM-XF field requests, but dbNSFP=ALL yields
+                    # the populated transcript keys we need.
+                    "dbNSFP": "ALL",
                     "hgvs": "1",
                     "refseq": "true",
                     "mane": "1",
@@ -212,7 +218,33 @@ def _extract_cadd_annotation(transcript_rows: list[dict]) -> CaddAnnotation:
     )
 
 
+def _extract_fathmm_xf_coding_annotation(transcript_rows: list[dict]) -> FathmmXfCodingAnnotation:
+    return FathmmXfCodingAnnotation(
+        prediction=_extract_first_predictor_string_value(transcript_rows, "fathmm-xf_coding_pred"),
+        score=_extract_first_predictor_value(transcript_rows, "fathmm-xf_coding_score"),
+        rankscore=_extract_first_predictor_value(transcript_rows, "fathmm-xf_coding_rankscore"),
+    )
+
+
 def _extract_first_predictor_value(transcript_rows: list[dict], key: str) -> float | None:
+    for row in _iter_prioritized_transcript_rows(transcript_rows):
+        value = row.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+
+    return None
+
+
+def _extract_first_predictor_string_value(transcript_rows: list[dict], key: str) -> str | None:
+    for row in _iter_prioritized_transcript_rows(transcript_rows):
+        value = row.get(key)
+        if isinstance(value, str) and value and value.lower() != INVALID_PREDICTOR_VALUE:
+            return value
+
+    return None
+
+
+def _iter_prioritized_transcript_rows(transcript_rows: list[dict]):
     prioritized_rows = [
         [row for row in transcript_rows if _is_mane_select_row(row)],
         [
@@ -225,8 +257,4 @@ def _extract_first_predictor_value(transcript_rows: list[dict], key: str) -> flo
 
     for rows in prioritized_rows:
         for row in rows:
-            value = row.get(key)
-            if isinstance(value, (int, float)):
-                return float(value)
-
-    return None
+            yield row

@@ -13,7 +13,7 @@ This document is the working specification for the oncogenicity evidence pipelin
 
 - Shared evidence result shape
 - Population evidence rules
-- Placeholders for computational, hotspots, predictive, and functional pipelines
+- Computational rules plus placeholders for hotspots, predictive, and functional pipelines
 - Placeholder for final score aggregation and classification mapping
 
 ## Shared Evidence Result Shape
@@ -236,7 +236,137 @@ This behavior is specifically for VEP annotation failure or lack of any VEP resu
 
 ## Computational Pipeline
 
-Placeholder. Expected initial inputs are `computationalAnnotation.cadd` and `computationalAnnotation.phyloP100wayVertebrate`.
+### Purpose
+
+The current computational pipeline applies a narrow missense-only rule set using Ensembl VEP-exposed `CADD` and `FATHMM-XF` annotations.
+
+### Current Upstream Inputs
+
+The current annotation step populates:
+
+- `computationalAnnotation.cadd.phred`
+- `computationalAnnotation.cadd.raw`
+- `computationalAnnotation.phyloP100wayVertebrate`
+- `computationalAnnotation.fathmmXfCoding.prediction`
+- `computationalAnnotation.fathmmXfCoding.score`
+- `computationalAnnotation.fathmmXfCoding.rankscore`
+
+Those values currently come from Ensembl REST VEP with:
+
+- `CADD=true`
+- `dbNSFP=ALL`
+
+In the current REST response shape, the FATHMM-family fields exposed for this implementation are the `FATHMM-XF` dbNSFP keys with hyphenated names such as `fathmm-xf_coding_pred`.
+Although those field names are the ones we read from the response, the current Ensembl REST service returned `invalid_field` when they were requested explicitly, so the implementation uses `dbNSFP=ALL` and then extracts the needed keys from the response.
+
+### Current Intended Rule Basis
+
+This rule set is explicitly scoped to missense variants.
+
+- `OP1` is used as a positive supporting rule when `CADD PHRED >= 15`
+- `SBP1` is used as a benign supporting rule when both of the following are true:
+- `mostSevereConsequence == "missense_variant"`
+- `CADD PHRED < 15`
+- `FATHMM-XF` prediction is benign or neutral
+
+Low `CADD` alone does not trigger `SBP1`. If `CADD` is low but the `FATHMM-XF` call is missing or not benign/neutral, the pipeline returns a score of `0` with no evidence code.
+
+### Initial Rule Mapping
+
+- If annotation failed or computational inputs are unavailable, return `not_available` with score `0`
+- If `mostSevereConsequence` is not `missense_variant`, return score `0` with no evidence code
+- If `CADD PHRED >= 15`, return `OP1` with score `1`
+- Else if `CADD PHRED < 15` and `FATHMM-XF` is benign or neutral, return `SBP1` with score `-1`
+- Else return score `0` with no evidence code
+
+### Draft Decision Logic
+
+```text
+if annotation failed:
+    not_available
+elif most_severe_consequence != "missense_variant":
+    score = 0
+    evidenceCode = null
+elif cadd_phred is missing:
+    not_available
+elif cadd_phred >= 15:
+    score = 1
+    evidenceCode = "OP1"
+elif fathmm_xf_prediction in {"N", "neutral", "benign", "tolerated"}:
+    score = -1
+    evidenceCode = "SBP1"
+else:
+    score = 0
+    evidenceCode = null
+```
+
+### Draft Evidence Statements
+
+For `OP1`:
+
+```json
+{
+  "score": 1,
+  "evidenceCode": "OP1",
+  "evidenceStatement": "CADD supports oncogenicity for this missense variant (PHRED 25.3).",
+  "status": "applied",
+  "source": "vep",
+  "matchedData": {
+    "mostSevereConsequence": "missense_variant",
+    "caddPhred": 25.3,
+    "caddRaw": 4.12,
+    "phyloP100wayVertebrate": 7.89,
+    "fathmmXfCodingPrediction": "D",
+    "fathmmXfCodingScore": 0.88,
+    "fathmmXfCodingRankscore": 0.91
+  }
+}
+```
+
+For `SBP1`:
+
+```json
+{
+  "score": -1,
+  "evidenceCode": "SBP1",
+  "evidenceStatement": "Concordant computational predictors support a benign effect for this missense variant (CADD PHRED 10.4; FATHMM-XF N).",
+  "status": "applied",
+  "source": "vep",
+  "matchedData": {
+    "mostSevereConsequence": "missense_variant",
+    "caddPhred": 10.4,
+    "caddRaw": 0.42,
+    "phyloP100wayVertebrate": 7.89,
+    "fathmmXfCodingPrediction": "N",
+    "fathmmXfCodingScore": 0.12,
+    "fathmmXfCodingRankscore": 0.08
+  }
+}
+```
+
+For an evaluated missense variant with no current computational code trigger:
+
+```json
+{
+  "score": 0,
+  "evidenceCode": null,
+  "evidenceStatement": "Computational evidence did not meet current scoring criteria.",
+  "status": "applied",
+  "source": "vep"
+}
+```
+
+For a non-missense variant:
+
+```json
+{
+  "score": 0,
+  "evidenceCode": null,
+  "evidenceStatement": "Computational missense rules were not applicable because the most severe consequence was synonymous_variant.",
+  "status": "applied",
+  "source": "vep"
+}
+```
 
 ## Hotspots Pipeline
 
@@ -287,4 +417,4 @@ The exact aggregation rules are not yet locked in this document.
 
 ## Worked Examples
 
-Placeholder. Once the population pipeline is implemented, add examples here drawn from test fixtures.
+Placeholder. Add worked examples here drawn from current population and computational test fixtures, then expand them as additional pipelines land.
