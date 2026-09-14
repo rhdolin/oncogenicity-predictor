@@ -1,3 +1,10 @@
+"""Map the internal prediction summary into a lightweight FHIR Observation.
+
+This module is intentionally only a projection layer. It does not evaluate any
+evidence itself; instead it turns the already-scored internal summary into the
+clinician-facing Observation shape used by the prediction endpoints.
+"""
+
 from datetime import datetime, timezone
 
 from app.models.prediction import (
@@ -23,6 +30,7 @@ def _build_concept(
     display: str | None = None,
     text: str | None = None,
 ) -> CodeableConcept:
+    """Build a small CodeableConcept using the temporary code system used in this prototype."""
     coding = []
     if code is not None or display is not None:
         coding.append(Coding(system=TEMP_CODE_SYSTEM, code=code, display=display))
@@ -33,6 +41,7 @@ def _build_pipeline_component(
     pipeline_name: str,
     evidence: EvidenceResult,
 ) -> ObservationComponent:
+    """Map one internal evidence result into a single Observation component."""
     component = ObservationComponent(
         code=_build_concept(
             code=f"{pipeline_name}-evidence",
@@ -69,6 +78,7 @@ def build_oncogenicity_observation(
     summary: OncogenicityPredictionSummary,
     submitted_variant: str,
 ) -> OncogenicityObservation:
+    """Project the internal summary into the current single-Observation FHIR response."""
     interpretation: list[CodeableConcept] = []
     if summary.overallClassification is not None:
         interpretation = [

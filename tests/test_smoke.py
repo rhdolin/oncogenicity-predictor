@@ -3,11 +3,33 @@ import pytest
 from datetime import datetime
 
 from app.main import app
+from app.models.annotated_variant import AnnotatedVariant, BasicAnnotation, TranscriptConsequence
+from app.models.normalized_variant import NormalizationMetadata, NormalizedVariant
 from app.services.annotation import variant_annotator
+from app.services.evidence import hotspots
 from app.services.normalization import variant_normalizer
 
 
 REAL_FETCH_VEP_ANNOTATION_RECORD = variant_annotator.fetch_vep_annotation_record
+
+
+FAKE_HOTSPOT_INDEX = hotspots.HotspotIndex(
+    snv_by_gene={
+        "FLT3": (
+            hotspots.SnpHotspotRecord(
+                gene="FLT3",
+                position=691,
+                ref_amino_acid="F",
+                alt_amino_acid="L",
+                mutation_count=75,
+                variant_count=12,
+            ),
+        )
+    },
+    indel_by_gene={},
+)
+
+EMPTY_HOTSPOT_INDEX = hotspots.HotspotIndex(snv_by_gene={}, indel_by_gene={})
 
 
 CLINGEN_SAMPLE_RECORD = {
@@ -82,6 +104,7 @@ VEP_SAMPLE_RECORD = {
         {
             "transcript_id": "NM_004119.3",
             "hgvsc": "NM_004119.3:c.2073T>G",
+            "hgvsp": "NP_004110.2:p.Phe691Leu",
             "mane_select": "ENST00000241453.12",
             "mane": ["MANE_Select"],
             "consequence_terms": ["missense_variant"],
@@ -144,6 +167,7 @@ def stub_clingen_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
         "fetch_vep_annotation_record",
         lambda normalized_variant: VEP_SAMPLE_RECORD,
     )
+    monkeypatch.setattr(hotspots, "_get_hotspot_index", lambda: EMPTY_HOTSPOT_INDEX)
 
 
 def test_root_exposes_docs() -> None:
@@ -195,12 +219,19 @@ def test_predict_single_returns_observation() -> None:
     assert computational["valueInteger"] == 1
     assert computational["interpretation"][0]["coding"][0]["code"] == "OP1"
     assert computational["interpretation"][0]["text"] == (
-        "CADD supports oncogenicity for this missense variant (PHRED 25.3)."
+        "CADD supports oncogenicity for this variant (PHRED 25.3; most severe consequence missense_variant)."
     )
     assert "dataAbsentReason" not in computational
 
     hotspots = _component_by_code(body, "hotspots-evidence")
-    assert hotspots["dataAbsentReason"]["coding"][0]["code"] == "unsupported"
+    assert hotspots["valueInteger"] == 0
+    assert hotspots["interpretation"] == [
+        {
+            "coding": [],
+            "text": "Hotspots evidence did not meet current scoring criteria.",
+        }
+    ]
+    assert "dataAbsentReason" not in hotspots
 
     predictive = _component_by_code(body, "predictive-evidence")
     assert predictive["dataAbsentReason"]["coding"][0]["code"] == "unsupported"
@@ -220,7 +251,30 @@ def test_annotate_single_returns_annotated_variant() -> None:
     assert body["normalizedVariant"]["submitted_variant"] == "NM_004119.3:c.2073T>G"
     assert body["annotationStatus"] == "complete"
     assert body["basicAnnotation"]["mostSevereConsequence"] == "missense_variant"
+    transcript_consequence = body["basicAnnotation"]["transcriptConsequences"][0]
+    assert transcript_consequence["proteinHgvs"] == "p.F691L"
+    assert transcript_consequence["proteinEventType"] == "substitution"
+    assert transcript_consequence["rawProteinHgvs"] == "NP_004110.2:p.Phe691Leu"
     assert body["computationalAnnotation"]["fathmmXfCoding"]["prediction"] == "D"
+
+
+def test_summarize_evidence_returns_raw_summary() -> None:
+    response = client.get(
+        "/summarizeEvidence",
+        params={"variant": "NM_004119.3:c.2073T>G"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["overallScore"] == 2
+    assert "overallClassification" in body
+    assert body["overallClassification"] is None
+    assert body["oncogenicityEvidence"]["population"]["evidenceCode"] == "OP4"
+    assert body["oncogenicityEvidence"]["population"]["matchedData"]["effectiveAf"] == 0.0002
+    assert body["oncogenicityEvidence"]["computational"]["evidenceCode"] == "OP1"
+    assert body["oncogenicityEvidence"]["computational"]["matchedData"]["fathmmXfCodingPrediction"] == "D"
+    assert body["oncogenicityEvidence"]["hotspots"]["evidenceCode"] is None
+    assert body["oncogenicityEvidence"]["hotspots"]["matchedData"]["gene"] == "FLT3"
 
 
 def test_predict_batch_returns_observations() -> None:
@@ -235,6 +289,164 @@ def test_predict_batch_returns_observations() -> None:
     assert body["observations"][0]["valueInteger"] == 2
     assert body["observations"][1]["valueInteger"] == 2
     assert body["observations"][1]["extension"][0]["valueString"] == "ENST00000241453.12:c.2073T>G"
+
+
+def test_predict_single_returns_hotspot_component_when_hotspot_matches() -> None:
+    monkeypatch_context = pytest.MonkeyPatch()
+    monkeypatch_context.setattr(hotspots, "_get_hotspot_index", lambda: FAKE_HOTSPOT_INDEX)
+    try:
+        response = client.get(
+            "/predictOncogenicity",
+            params={"variant": "NM_004119.3:c.2073T>G"},
+        )
+    finally:
+        monkeypatch_context.undo()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valueInteger"] == 6
+
+    hotspot_component = _component_by_code(body, "hotspots-evidence")
+    assert hotspot_component["valueInteger"] == 4
+    assert hotspot_component["interpretation"][0]["coding"][0]["code"] == "OS3"
+    assert hotspot_component["interpretation"][0]["text"] == (
+        "Located in Cancer Hotspots with at least 50 observed mutations (75) "
+        "and at least 10 occurrences of the same protein event (12)."
+    )
+
+
+def test_summarize_evidence_returns_hotspot_match_data_when_present() -> None:
+    monkeypatch_context = pytest.MonkeyPatch()
+    monkeypatch_context.setattr(hotspots, "_get_hotspot_index", lambda: FAKE_HOTSPOT_INDEX)
+    try:
+        response = client.get(
+            "/summarizeEvidence",
+            params={"variant": "NM_004119.3:c.2073T>G"},
+        )
+    finally:
+        monkeypatch_context.undo()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["overallScore"] == 6
+    assert body["oncogenicityEvidence"]["hotspots"]["evidenceCode"] == "OS3"
+    assert body["oncogenicityEvidence"]["hotspots"]["matchedData"]["gene"] == "FLT3"
+    assert body["oncogenicityEvidence"]["hotspots"]["matchedData"]["position"] == 691
+    assert body["oncogenicityEvidence"]["hotspots"]["matchedData"]["proteinHgvs"] == "p.F691L"
+
+
+def test_hotspot_indel_match_uses_protein_hgvs_bounds_before_vep_positions() -> None:
+    indel_index = hotspots.HotspotIndex(
+        snv_by_gene={},
+        indel_by_gene={
+            "EGFR": (
+                hotspots.IndelHotspotRecord(
+                    gene="EGFR",
+                    hotspot_position="745-759",
+                    event="E746_A750del",
+                    event_start=746,
+                    event_end=750,
+                    mutation_count=156,
+                    variant_count=123,
+                ),
+            )
+        },
+    )
+    annotated_variant = AnnotatedVariant(
+        normalizedVariant=NormalizedVariant(
+            submitted_variant="NM_005228.5:c.2235_2249del",
+            normalization=NormalizationMetadata(
+                source="test",
+                queried_variant="NM_005228.5:c.2235_2249del",
+            ),
+            geneSymbol="EGFR",
+        ),
+        annotationStatus="complete",
+        basicAnnotation=BasicAnnotation(
+            mostSevereConsequence="inframe_deletion",
+            transcriptConsequences=[
+                TranscriptConsequence(
+                    transcriptRefSeq="NM_005228.5",
+                    consequenceTerms=["inframe_deletion"],
+                    proteinStart=745,
+                    proteinEnd=750,
+                    proteinHgvs="p.E746_A750del",
+                    proteinEventType="deletion",
+                    isManeSelect=True,
+                )
+            ],
+        ),
+        computationalAnnotation=None,
+    )
+
+    monkeypatch_context = pytest.MonkeyPatch()
+    monkeypatch_context.setattr(hotspots, "_get_hotspot_index", lambda: indel_index)
+    try:
+        evidence = hotspots.build_hotspots_evidence(annotated_variant)
+    finally:
+        monkeypatch_context.undo()
+
+    assert evidence.evidenceCode == "OS3"
+    assert evidence.score == 4
+    assert evidence.matchedData["event"] == "E746_A750del"
+    assert evidence.matchedData["proteinStart"] == 745
+    assert evidence.matchedData["proteinEnd"] == 750
+
+
+def test_hotspot_indel_match_still_rejects_event_mismatch() -> None:
+    indel_index = hotspots.HotspotIndex(
+        snv_by_gene={},
+        indel_by_gene={
+            "EGFR": (
+                hotspots.IndelHotspotRecord(
+                    gene="EGFR",
+                    hotspot_position="745-759",
+                    event="L747_T751del",
+                    event_start=747,
+                    event_end=751,
+                    mutation_count=156,
+                    variant_count=9,
+                ),
+            )
+        },
+    )
+    annotated_variant = AnnotatedVariant(
+        normalizedVariant=NormalizedVariant(
+            submitted_variant="NM_005228.5:c.2235_2249del",
+            normalization=NormalizationMetadata(
+                source="test",
+                queried_variant="NM_005228.5:c.2235_2249del",
+            ),
+            geneSymbol="EGFR",
+        ),
+        annotationStatus="complete",
+        basicAnnotation=BasicAnnotation(
+            mostSevereConsequence="inframe_deletion",
+            transcriptConsequences=[
+                TranscriptConsequence(
+                    transcriptRefSeq="NM_005228.5",
+                    consequenceTerms=["inframe_deletion"],
+                    proteinStart=745,
+                    proteinEnd=750,
+                    proteinHgvs="p.E746_A750del",
+                    proteinEventType="deletion",
+                    isManeSelect=True,
+                )
+            ],
+        ),
+        computationalAnnotation=None,
+    )
+
+    monkeypatch_context = pytest.MonkeyPatch()
+    monkeypatch_context.setattr(hotspots, "_get_hotspot_index", lambda: indel_index)
+    try:
+        evidence = hotspots.build_hotspots_evidence(annotated_variant)
+    finally:
+        monkeypatch_context.undo()
+
+    assert evidence.evidenceCode is None
+    assert evidence.score == 0
+    assert evidence.evidenceStatement == "Hotspots evidence did not meet current scoring criteria."
 
 
 def test_non_refseq_protein_effect_is_not_used() -> None:
@@ -683,7 +895,7 @@ def test_predict_single_returns_sbp1_for_low_cadd_and_benign_fathmm_xf() -> None
     assert computational["interpretation"][0]["coding"][0]["code"] == "SBP1"
 
 
-def test_predict_single_does_not_apply_sbp1_outside_missense() -> None:
+def test_predict_single_applies_op1_for_high_cadd_outside_missense() -> None:
     non_missense_record = {
         **VEP_SAMPLE_RECORD,
         "most_severe_consequence": "synonymous_variant",
@@ -691,7 +903,7 @@ def test_predict_single_does_not_apply_sbp1_outside_missense() -> None:
             {
                 **VEP_SAMPLE_RECORD["transcript_consequences"][0],
                 "consequence_terms": ["synonymous_variant"],
-                "cadd_phred": 10.4,
+                "cadd_phred": 25.3,
                 "fathmm-xf_coding_pred": "N",
             },
             VEP_SAMPLE_RECORD["transcript_consequences"][1],
@@ -714,13 +926,54 @@ def test_predict_single_does_not_apply_sbp1_outside_missense() -> None:
 
     assert response.status_code == 200
     body = response.json()
+    assert body["valueInteger"] == 2
+    computational = _component_by_code(body, "computational-evidence")
+    assert computational["valueInteger"] == 1
+    assert computational["interpretation"][0]["coding"][0]["code"] == "OP1"
+    assert computational["interpretation"][0]["text"] == (
+        "CADD supports oncogenicity for this variant (PHRED 25.3; most severe consequence synonymous_variant)."
+    )
+
+
+def test_predict_single_returns_no_computational_code_for_low_cadd_non_missense() -> None:
+    low_cadd_non_missense_record = {
+        **VEP_SAMPLE_RECORD,
+        "most_severe_consequence": "inframe_deletion",
+        "transcript_consequences": [
+            {
+                **VEP_SAMPLE_RECORD["transcript_consequences"][0],
+                "consequence_terms": ["inframe_deletion"],
+                "cadd_phred": 10.4,
+                "cadd_raw": 0.42,
+                "fathmm-xf_coding_pred": "N",
+            },
+            VEP_SAMPLE_RECORD["transcript_consequences"][1],
+        ],
+    }
+
+    monkeypatch_context = pytest.MonkeyPatch()
+    monkeypatch_context.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: low_cadd_non_missense_record,
+    )
+    try:
+        response = client.get(
+            "/predictOncogenicity",
+            params={"variant": "NM_004119.3:c.2073T>G"},
+        )
+    finally:
+        monkeypatch_context.undo()
+
+    assert response.status_code == 200
+    body = response.json()
     assert body["valueInteger"] == 1
     computational = _component_by_code(body, "computational-evidence")
     assert computational["valueInteger"] == 0
     assert computational["interpretation"][0]["coding"] == []
     assert computational["interpretation"][0]["text"] == (
-        "Computational missense rules were not applicable because the most severe consequence "
-        "was synonymous_variant."
+        "Computational missense benign rules were not applicable because the most severe consequence "
+        "was inframe_deletion."
     )
 
 

@@ -5,7 +5,7 @@
 - Framework: FastAPI
 - Deployment target: Render
 - Public contract: single-variant `GET` endpoints and batch `POST`
-- Current response format: `GET /annotateVariant` returns internal `AnnotatedVariant`; prediction endpoints return a single FHIR Observation-style prediction object
+- Current response format: `GET /annotateVariant` returns internal `AnnotatedVariant`; `GET /summarizeEvidence` returns the internal evidence summary; prediction endpoints return a single FHIR Observation-style prediction object
 - Target later response format: keep the single-variant FHIR `Observation` shape and add a FHIR `Bundle` for batch results
 - Target client-facing prediction payload: FHIR Observation content built from evidence summary plus final score/classification, without embedding internal `AnnotatedVariant` or `NormalizedVariant` objects
 - Scope: deterministic service implementation of the scoring approach described in https://pmc.ncbi.nlm.nih.gov/articles/PMC9081216/
@@ -24,7 +24,7 @@
 
 - The deployed API has already been validated on Render.
 - The current non-stub implementation slice is variant normalization, first-pass annotation, the population and computational evidence pipelines, and initial FHIR Observation rendering.
-- `GET /annotateVariant` returns the internal annotation-layer result, while `GET /predictOncogenicity` and `POST /predictOncogenicity` return FHIR Observation-style prediction payloads.
+- `GET /annotateVariant` returns the internal annotation-layer result, `GET /summarizeEvidence` returns the raw evidence summary before FHIR mapping, and `GET /predictOncogenicity` plus `POST /predictOncogenicity` return FHIR Observation-style prediction payloads.
 - Submitted variants must currently be provided in HGVS format.
 - The route layer calls orchestration entrypoints. The annotation-only flow delegates to the ClinGen-backed variant normalizer and then the VEP-backed variant annotator, while the prediction flow continues through evidence building, score aggregation, and FHIR Observation mapping.
 - `canonical_b37` is currently populated only from a transcript allele that has a `genomeAlignments` entry for `GRCh37`, using the first primary `NM_` HGVS string from that transcript.
@@ -51,7 +51,7 @@
 - Functional data: primarily MaveDB
 - Predictive data: VEP and ClinVar
 - Cancer hotspots
-- Computational evidence: missense-only `CADD` plus `FATHMM-XF` concordance
+- Computational evidence: broad `OP1` support from high `CADD`, plus missense-only `SBP1` benign concordance with `FATHMM-XF`
 
 The detailed rule specification for these pipelines and the final score layer lives in `docs/evidence-and-scoring.md`.
 
@@ -157,6 +157,7 @@ Notes:
 
 - `GET /annotateVariant` currently returns `AnnotatedVariant`.
 - `GET /annotateVariant` is the explicit annotation-oriented single-variant endpoint.
+- `GET /summarizeEvidence` currently returns `OncogenicityPredictionSummary` and is intended as an internal/debug endpoint.
 - Prediction endpoints currently return a single FHIR Observation-style object with `issued`, a custom extension carrying the submitted variant HGVS string, an overall score, and one component per evidence pipeline.
 - Batch prediction requests currently return an `observations` list of those prediction objects.
 - Prediction success/failure is currently expressed through component-level values versus `dataAbsentReason`, rather than by embedding the internal annotation result.

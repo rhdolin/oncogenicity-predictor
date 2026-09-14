@@ -1,17 +1,19 @@
 # Oncogenicity Predictor
 
-This repository currently contains a minimal FastAPI service for validating local startup, Render deployment, normalization, annotation, the population and computational evidence pipelines, and an initial FHIR Observation-style prediction output.
+This repository currently contains a minimal FastAPI service for validating local startup, Render deployment, normalization, annotation, the population, computational, and hotspot evidence pipelines, and an initial FHIR Observation-style prediction output.
 
 ## Endpoints
 
 - `GET /`
 - `GET /health`
 - `GET /annotateVariant?variant=NM_004119.3%3Ac.2073T%3EG`
+- `GET /summarizeEvidence?variant=NM_004119.3%3Ac.2073T%3EG`
 - `GET /predictOncogenicity?variant=NM_004119.3%3Ac.2073T%3EG`
 - `POST /predictOncogenicity`
 - `GET /docs`
 
 The current `GET /annotateVariant` endpoint accepts a single variant in HGVS format, normalizes it through ClinGen, annotates it through Ensembl VEP, and returns the internal `AnnotatedVariant` JSON shape.
+The current `GET /summarizeEvidence` endpoint is an internal/debug endpoint that accepts a single variant in HGVS format and returns the raw evidence summary JSON before FHIR Observation mapping.
 The current `GET /predictOncogenicity` endpoint accepts a single variant in HGVS format, normalizes it through ClinGen, annotates it through Ensembl VEP, evaluates the currently implemented evidence pipelines, and returns a single FHIR Observation-style prediction object.
 The current `POST /predictOncogenicity` endpoint accepts a list of variants in HGVS format and returns an `observations` list in that same shape.
 If VEP annotation fails for a variant, the prediction endpoints still return a partial observation with `component.dataAbsentReason` set for the unavailable pipeline rather than failing the whole request.
@@ -42,7 +44,7 @@ After deployment, the interactive API docs should be available at `/docs` on the
 
 This is an incremental implementation.
 
-- Current behavior: ClinGen-backed normalization, Ensembl VEP annotation, population and computational evidence scoring, and single-Observation prediction output for the prediction endpoints
+- Current behavior: ClinGen-backed normalization, Ensembl VEP annotation, population, computational, and hotspot evidence scoring, and single-Observation prediction output for the prediction endpoints
 - Planned later behavior: additional evidence pipelines, richer scoring/classification, and batch FHIR `Bundle` responses
 
 At the moment, the normalization and annotation path requires submitted variants to be in HGVS format.
@@ -83,10 +85,13 @@ The current prediction payload from `GET /predictOncogenicity` and `POST /predic
 
 The current computational pipeline is intentionally narrow:
 
-- it only evaluates missense variants
-- `OP1` is applied when `CADD PHRED >= 15`
-- `SBP1` is applied when `CADD PHRED < 15` and `FATHMM-XF` is concordantly benign or neutral
+- `OP1` is applied when `CADD PHRED >= 15`, including non-missense variants with usable CADD annotation
+- `SBP1` is applied only for missense variants when `CADD PHRED < 15` and `FATHMM-XF` is concordantly benign or neutral
 - `FATHMM-XF` values currently come from Ensembl REST VEP `dbNSFP` fields such as `fathmm-xf_coding_pred`
+
+The bundled hotspot workbook at `data/hotspots_v2.xlsx` is sourced from Cancer Hotspots: https://www.cancerhotspots.org/#/home
+
+The current hotspot pipeline loads that workbook into an in-memory cache on first use. It applies the legacy `OS3`, `OM3`, and `OP3` thresholds using exact gene plus protein-event matching, with SNVs requiring exact amino-acid substitution agreement and indels limited to direct matches supported by the workbook's native representation.
 
 Coordinate conventions currently used by the normalizer include:
 

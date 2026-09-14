@@ -13,7 +13,7 @@ This document is the working specification for the oncogenicity evidence pipelin
 
 - Shared evidence result shape
 - Population evidence rules
-- Computational rules plus placeholders for hotspots, predictive, and functional pipelines
+- Computational rules, implemented hotspot scoring, and placeholders for predictive and functional pipelines
 - Placeholder for final score aggregation and classification mapping
 
 ## Shared Evidence Result Shape
@@ -238,7 +238,7 @@ This behavior is specifically for VEP annotation failure or lack of any VEP resu
 
 ### Purpose
 
-The current computational pipeline applies a narrow missense-only rule set using Ensembl VEP-exposed `CADD` and `FATHMM-XF` annotations.
+The current computational pipeline applies a narrow rule set using Ensembl VEP-exposed `CADD` and `FATHMM-XF` annotations. Positive support from high `CADD` can be applied across consequence classes, while benign support remains restricted to missense variants.
 
 ### Current Upstream Inputs
 
@@ -261,22 +261,20 @@ Although those field names are the ones we read from the response, the current E
 
 ### Current Intended Rule Basis
 
-This rule set is explicitly scoped to missense variants.
-
 - `OP1` is used as a positive supporting rule when `CADD PHRED >= 15`
 - `SBP1` is used as a benign supporting rule when both of the following are true:
 - `mostSevereConsequence == "missense_variant"`
 - `CADD PHRED < 15`
 - `FATHMM-XF` prediction is benign or neutral
 
-Low `CADD` alone does not trigger `SBP1`. If `CADD` is low but the `FATHMM-XF` call is missing or not benign/neutral, the pipeline returns a score of `0` with no evidence code.
+Low `CADD` alone does not trigger `SBP1`. If `CADD` is low but the `FATHMM-XF` call is missing or not benign/neutral, the pipeline returns a score of `0` with no evidence code. Non-missense variants can still receive `OP1` if `CADD` is high enough, but they are not eligible for the current `SBP1` benign rule.
 
 ### Initial Rule Mapping
 
 - If annotation failed or computational inputs are unavailable, return `not_available` with score `0`
-- If `mostSevereConsequence` is not `missense_variant`, return score `0` with no evidence code
 - If `CADD PHRED >= 15`, return `OP1` with score `1`
-- Else if `CADD PHRED < 15` and `FATHMM-XF` is benign or neutral, return `SBP1` with score `-1`
+- Else if `mostSevereConsequence == "missense_variant"` and `FATHMM-XF` is benign or neutral, return `SBP1` with score `-1`
+- Else if `mostSevereConsequence` is not `missense_variant`, return score `0` with no evidence code
 - Else return score `0` with no evidence code
 
 ### Draft Decision Logic
@@ -284,17 +282,17 @@ Low `CADD` alone does not trigger `SBP1`. If `CADD` is low but the `FATHMM-XF` c
 ```text
 if annotation failed:
     not_available
-elif most_severe_consequence != "missense_variant":
-    score = 0
-    evidenceCode = null
 elif cadd_phred is missing:
     not_available
 elif cadd_phred >= 15:
     score = 1
     evidenceCode = "OP1"
-elif fathmm_xf_prediction in {"N", "neutral", "benign", "tolerated"}:
+elif most_severe_consequence == "missense_variant" and fathmm_xf_prediction in {"N", "neutral", "benign", "tolerated"}:
     score = -1
     evidenceCode = "SBP1"
+elif most_severe_consequence != "missense_variant":
+  score = 0
+  evidenceCode = null
 else:
     score = 0
     evidenceCode = null
@@ -308,7 +306,7 @@ For `OP1`:
 {
   "score": 1,
   "evidenceCode": "OP1",
-  "evidenceStatement": "CADD supports oncogenicity for this missense variant (PHRED 25.3).",
+  "evidenceStatement": "CADD supports oncogenicity for this variant (PHRED 25.3; most severe consequence missense_variant).",
   "status": "applied",
   "source": "vep",
   "matchedData": {
@@ -362,7 +360,7 @@ For a non-missense variant:
 {
   "score": 0,
   "evidenceCode": null,
-  "evidenceStatement": "Computational missense rules were not applicable because the most severe consequence was synonymous_variant.",
+  "evidenceStatement": "Computational missense benign rules were not applicable because the most severe consequence was synonymous_variant.",
   "status": "applied",
   "source": "vep"
 }
@@ -370,7 +368,19 @@ For a non-missense variant:
 
 ## Hotspots Pipeline
 
-Placeholder. Source selection and matching semantics are not yet locked.
+Planned source: the local workbook at `data/hotspots_v2.xlsx`, copied from Cancer Hotspots: https://www.cancerhotspots.org/#/home
+
+Current implementation:
+
+- the workbook is loaded into an in-memory cache on first use rather than being reopened for each variant
+- transcript consequences are evaluated in order, and the first defensible hotspot match is used
+- matching is gene-centric because the workbook is not transcript-indexed
+- SNVs require exact match on gene, amino-acid position, reference amino acid, and alternate amino acid
+- indels are supported only for direct matches that can be justified from the workbook's native event representation, with no additional indel normalization layer
+- thresholds follow the legacy implementation:
+- `OS3`: `mutation_count >= 50` and exact protein-event count `>= 10`
+- `OM3`: exact protein-event count `>= 10`
+- `OP3`: exact protein-event count `1..9`
 
 ## Predictive Pipeline
 

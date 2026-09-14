@@ -1,12 +1,22 @@
+"""Population evidence scoring from summarized gnomAD frequencies.
+
+This module consumes the collapsed population summary produced during
+annotation rather than raw VEP frequency maps. It applies the current v1 rule
+set for SBVS1, SBS1, and OP4 and preserves the key values that drove the
+decision in matchedData.
+"""
+
 from app.models.annotated_variant import AnnotatedVariant
 from app.models.prediction import EvidenceResult
 
 
 def _format_percent(value: float) -> str:
+    """Format a frequency as a percentage for clinician-facing evidence statements."""
     return f"{value * 100:.2f}%"
 
 
 def build_population_evidence(annotated_variant: AnnotatedVariant) -> EvidenceResult:
+    """Score the population pipeline from the annotation-layer frequency summary."""
     if annotated_variant.basicAnnotation is None:
         return EvidenceResult(
             score=0,

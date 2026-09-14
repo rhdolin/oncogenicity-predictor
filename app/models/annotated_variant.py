@@ -18,6 +18,21 @@ class TranscriptConsequence(BaseModel):
     proteinStart: int | None = None
     proteinEnd: int | None = None
     aminoAcids: str | None = None
+    proteinHgvs: str | None = None
+    proteinEventType: Literal[
+        "substitution",
+        "deletion",
+        "insertion",
+        "duplication",
+        "delins",
+        "frameshift",
+        "extension",
+        "stop_gain",
+        "stop_loss",
+        "silent",
+        "unknown",
+    ] | None = None
+    rawProteinHgvs: str | None = None
     isManeSelect: bool | None = None
 
 
