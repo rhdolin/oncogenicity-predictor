@@ -18,8 +18,9 @@ app = FastAPI(
         "Ensembl VEP, evaluates the currently implemented evidence pipelines, "
         "and exposes both an internal raw evidence summary endpoint plus FHIR "
         "Observation-style prediction responses. Submitted variants must "
-        "currently be provided in HGVS format. When VEP annotation fails, the "
-        "prediction endpoints still return partial observations with "
+        "currently be provided in HGVS format. Evidence and prediction endpoints "
+        "also support an optional tumorType input for context-dependent rules. "
+        "When VEP annotation fails, the prediction endpoints still return partial observations with "
         "component-level data absent reasons instead of failing the whole "
         "request."
     ),

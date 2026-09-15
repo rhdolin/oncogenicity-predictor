@@ -8,6 +8,7 @@ clinician-facing Observation shape used by the prediction endpoints.
 from datetime import datetime, timezone
 
 from app.models.prediction import (
+    Annotation,
     CodeableConcept,
     Coding,
     EvidenceResult,
@@ -22,6 +23,11 @@ TEMP_CODE_SYSTEM = "https://oncogenicity-predictor.example/fhir/CodeSystem/temp-
 DATA_ABSENT_REASON_SYSTEM = "http://terminology.hl7.org/CodeSystem/data-absent-reason"
 SUBMITTED_VARIANT_EXTENSION_URL = (
     "https://oncogenicity-predictor.example/fhir/StructureDefinition/submitted-variant"
+)
+PROTOTYPE_DISCLAIMER = (
+    "This oncogenicity predictor is a rapid prototyping implementation intended to support experimentation. "
+    "This algorithm is not fit for actual clinical use and must not be used "
+    "for patient care or clinical decision-making."
 )
 
 
@@ -107,6 +113,7 @@ def build_oncogenicity_observation(
                 valueString=submitted_variant,
             )
         ],
+        note=[Annotation(text=PROTOTYPE_DISCLAIMER)],
         component=[
             _build_pipeline_component("population", summary.oncogenicityEvidence.population),
             _build_pipeline_component(

@@ -1,21 +1,21 @@
 # Oncogenicity Predictor
 
-This repository currently contains a minimal FastAPI service for validating local startup, Render deployment, normalization, annotation, the population, computational, and hotspot evidence pipelines, and an initial FHIR Observation-style prediction output.
+This repository currently contains a minimal FastAPI service for validating local startup, Render deployment, normalization, annotation, the population, computational, hotspot, predictive, and functional evidence pipelines, and an initial FHIR Observation-style prediction output.
 
 ## Endpoints
 
 - `GET /`
 - `GET /health`
 - `GET /annotateVariant?variant=NM_004119.3%3Ac.2073T%3EG`
-- `GET /summarizeEvidence?variant=NM_004119.3%3Ac.2073T%3EG`
-- `GET /predictOncogenicity?variant=NM_004119.3%3Ac.2073T%3EG`
+- `GET /summarizeEvidence?variant=NM_004119.3%3Ac.2073T%3EG[&tumorType=Breast%20Cancer]`
+- `GET /predictOncogenicity?variant=NM_004119.3%3Ac.2073T%3EG[&tumorType=Breast%20Cancer]`
 - `POST /predictOncogenicity`
 - `GET /docs`
 
 The current `GET /annotateVariant` endpoint accepts a single variant in HGVS format, normalizes it through ClinGen, annotates it through Ensembl VEP, and returns the internal `AnnotatedVariant` JSON shape.
-The current `GET /summarizeEvidence` endpoint is an internal/debug endpoint that accepts a single variant in HGVS format and returns the raw evidence summary JSON before FHIR Observation mapping.
-The current `GET /predictOncogenicity` endpoint accepts a single variant in HGVS format, normalizes it through ClinGen, annotates it through Ensembl VEP, evaluates the currently implemented evidence pipelines, and returns a single FHIR Observation-style prediction object.
-The current `POST /predictOncogenicity` endpoint accepts a list of variants in HGVS format and returns an `observations` list in that same shape.
+The current `GET /summarizeEvidence` endpoint is an internal/debug endpoint that accepts a single variant in HGVS format and returns the raw evidence summary JSON before FHIR Observation mapping. It also accepts an optional `tumorType` query parameter used by context-dependent evidence rules.
+The current `GET /predictOncogenicity` endpoint accepts a single variant in HGVS format, normalizes it through ClinGen, annotates it through Ensembl VEP, evaluates the currently implemented evidence pipelines, and returns a single FHIR Observation-style prediction object. It also accepts an optional `tumorType` query parameter used by context-dependent evidence rules.
+The current `POST /predictOncogenicity` endpoint accepts a list of variants in HGVS format and returns an `observations` list in that same shape. It also accepts an optional top-level `tumorType` field applied to every variant in the batch.
 If VEP annotation fails for a variant, the prediction endpoints still return a partial observation with `component.dataAbsentReason` set for the unavailable pipeline rather than failing the whole request.
 
 ## Local Run
@@ -44,7 +44,7 @@ After deployment, the interactive API docs should be available at `/docs` on the
 
 This is an incremental implementation.
 
-- Current behavior: ClinGen-backed normalization, Ensembl VEP annotation, population, computational, and hotspot evidence scoring, and single-Observation prediction output for the prediction endpoints
+- Current behavior: ClinGen-backed normalization, Ensembl VEP annotation, population, computational, hotspot, predictive, and ClinMAVE-backed functional evidence scoring, and single-Observation prediction output for the prediction endpoints
 - Planned later behavior: additional evidence pipelines, richer scoring/classification, and batch FHIR `Bundle` responses
 
 At the moment, the normalization and annotation path requires submitted variants to be in HGVS format.
@@ -83,6 +83,49 @@ The current prediction payload from `GET /predictOncogenicity` and `POST /predic
 - pipeline `component.interpretation` for evidence code plus short evidence statement
 - pipeline `component.dataAbsentReason` for unavailable pipelines
 
+Current functional evidence behavior includes:
+
+- local ClinMAVE-backed lookup from `data/clinmave/variants.<GENE>.csv`
+- lazy per-gene CSV loading with in-process caching on first use
+- exact transcript-HGVS matching against `normalizedVariant.transcript_hgvs.mane_select_b38`
+- `OS2` for oncogene plus gain-of-function and tumor suppressor gene plus loss-of-function
+- `SBS2` score `-4` for functionally normal variants in resolved oncogene or tumor suppressor gene contexts
+- score `0` with `applied` status for opposite-direction abnormal functional results
+- score `0` with `applied` status when ClinMAVE contains conflicting functional classifications for the same exact matched variant
+- `not_available` when ClinMAVE does not provide usable evidence for the queried gene, variant, or tumor-type context
+- optional `tumorType` support on evidence and prediction endpoints for context-dependent genes such as `GATA3`
+
+The current retained ClinMAVE gene panel is:
+
+- `BRAF`
+- `KRAS`
+- `NRAS`
+- `HRAS`
+- `EGFR`
+- `ERBB2`
+- `ALK`
+- `MET`
+- `PIK3CA`
+- `AKT1`
+- `PTEN`
+- `TP53`
+- `NF1`
+- `ARID1A`
+- `SMAD4`
+- `JAK2`
+- `BRCA1`
+- `BRCA2`
+- `ATM`
+- `CHEK2`
+- `VHL`
+- `BAP1`
+- `CDK4`
+- `CDK6`
+- `GATA3`
+- `MYC`
+
+`data/clinmave/genes.txt` is the source-of-truth manifest for that retained panel.
+
 The current computational pipeline is intentionally narrow:
 
 - `OP1` is applied when `CADD PHRED >= 15`, including non-missense variants with usable CADD annotation
@@ -97,3 +140,8 @@ Coordinate conventions currently used by the normalizer include:
 
 - `chrom` values like `chr13`, `chrX`, `chrY`, and `chrM`
 - `chrom_num` values like `13`, `23` for X, `24` for Y, and `M` for mitochondrial variants
+
+## Disclaimer
+
+This repository is a rapid prototyping implementation designed to support experimentation.
+It is not fit for actual clinical use and must not be used for patient care or clinical decision-making.

@@ -13,7 +13,7 @@ This document is the working specification for the oncogenicity evidence pipelin
 
 - Shared evidence result shape
 - Population evidence rules
-- Computational rules, implemented hotspot scoring, and placeholders for predictive and functional pipelines
+- Computational rules plus implemented hotspot, predictive, and functional pipelines
 - Placeholder for final score aggregation and classification mapping
 
 ## Shared Evidence Result Shape
@@ -43,6 +43,8 @@ Working meanings for the additional fields:
 - `matchedData`: the structured values that drove the result so the rule is auditable without parsing free text
 
 The exact enum values are now partially locked for the current implementation: `applied` and `not_available` are both in use, and the distinction between rule outcome and pipeline availability is preserved.
+
+Each evidence pipeline emits at most one result. When a pipeline contains multiple criteria, they are evaluated in a defined priority order and the first matching criterion wins. If no criterion matches, the pipeline still returns a single `applied` result with score `0` rather than emitting multiple partial results.
 
 ## Population Pipeline
 
@@ -384,11 +386,105 @@ Current implementation:
 
 ## Predictive Pipeline
 
-Placeholder. The split between consequence-based logic and ClinVar-based logic is not yet locked.
+The predictive pipeline is currently implemented and combines deterministic consequence-based logic with ClinVar somatic oncogenicity lookups.
+
+Current rule order:
+
+- `OVS1`
+- `OS1`
+- `OM2`
+- `SBP2`
+- `OM4`
+- else score `0` with `applied`
+
+Current source behavior:
+
+- consequence-driven rules use normalized and annotated variant state
+- role-sensitive consequence rules use optional `tumorType` to resolve dual-role genes such as `GATA3`; without a resolved role, `OVS1` is not applied
+- ClinVar lookup uses E-utilities search plus summary retrieval
+- ClinVar `[varnam]` matching is treated as non-exact, so local alias confirmation is required before applying `OS1` or `OM4`
 
 ## Functional Pipeline
 
-Placeholder. MaveDB is the expected first deterministic source, with any literature-based synthesis deferred until explicitly designed.
+### Purpose
+
+The functional pipeline uses locally retained ClinMAVE per-gene CSV exports to map curated functional assay results into `OS2`, `SBS2`, or a neutral score of `0`.
+
+### Current Upstream Inputs
+
+The current implementation depends on:
+
+- `normalizedVariant.geneSymbol`
+- `normalizedVariant.transcript_hgvs.mane_select_b38`
+- optional `tumorType` request input on evidence and prediction endpoints
+- local ClinMAVE files under `data/clinmave/variants.<GENE>.csv`
+- local gene-role metadata in `data/_Dict_Gene.csv`
+
+ClinMAVE `Identifier` values are normalized from forms like:
+
+- `NM_000051.4(ATM):c.283C>T (p.Gln95Ter)`
+
+to transcript HGVS strings like:
+
+- `NM_000051.4:c.283C>T`
+
+The pipeline then performs exact equality matching against `mane_select_b38`.
+
+### Current Match Policy
+
+- Primary and only v1 match key: `normalizedVariant.transcript_hgvs.mane_select_b38`
+- Match requires exact string equality after ClinMAVE `Identifier` normalization
+- No fallback to alternate transcript, protein, or genomic matching in v1
+- If the queried gene is not present in the retained ClinMAVE panel, return `not_available`
+- If the gene is present but the variant is not found, return `not_available`
+
+### Current Functional Classification Mapping
+
+Observed ClinMAVE functional classes in the retained dataset are:
+
+- `Functionally normal`
+- `Gain-of-function`
+- `Loss-of-function`
+
+They are interpreted as:
+
+- `Functionally normal` -> normal
+- `Gain-of-function` -> GOF
+- `Loss-of-function` -> LOF
+
+### Current Gene Role Policy
+
+Most retained genes resolve directly to `oncogene` or `tsg` using `data/_Dict_Gene.csv`.
+
+`GATA3` is currently treated as a dual-role gene and requires `tumorType` to resolve role:
+
+- Oncogene contexts: `Peripheral T-Cell Lymphoma`, `T-Cell Acute Lymphoblastic Leukemia`, `Hodgkin Lymphoma`, `Neuroblastoma`, `T-Cell Lymphoblastic Lymphoma`
+- Tumor suppressor contexts: `Breast Cancer`, `Urothelial Carcinoma`, `Bladder Carcinoma`, `Renal Cell Carcinoma`, `Parathyroid Carcinoma`
+- Any other tumor type: no functional rule is applied and the result is `not_available`
+
+### Current Rule Mapping
+
+- oncogene + `Gain-of-function` -> `OS2`, score `4`
+- tumor suppressor gene + `Loss-of-function` -> `OS2`, score `4`
+- oncogene + `Functionally normal` -> `SBS2`, score `-4`
+- tumor suppressor gene + `Functionally normal` -> `SBS2`, score `-4`
+- oncogene + `Loss-of-function` -> score `0`, `applied`
+- tumor suppressor gene + `Gain-of-function` -> score `0`, `applied`
+- conflicting ClinMAVE classifications for the same exact matched transcript HGVS -> score `0`, `applied`
+
+### Current Availability Semantics
+
+- `applied` when a ClinMAVE row is found and evaluated, including neutral score `0` outcomes
+- `applied` when exact-match ClinMAVE rows are found but contain conflicting functional classifications, in which case the statement explains that no functional rule is applied
+- `not_available` when the gene is not in the retained ClinMAVE panel
+- `not_available` when the gene is supported but the variant is not found
+- `not_available` when tumor-type context is required but missing or unresolved
+
+### Current Data Access Strategy
+
+- ClinMAVE gene CSVs are loaded lazily, one gene at a time, on first use
+- Parsed rows are cached in memory for the life of the process
+- The pipeline does not preload all retained ClinMAVE files at startup
 
 ## Final Score Aggregation
 

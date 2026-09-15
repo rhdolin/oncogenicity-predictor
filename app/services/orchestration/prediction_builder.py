@@ -10,29 +10,31 @@ from app.models.prediction import (
     OncogenicityEvidence,
     OncogenicityPredictionSummary,
 )
+from app.models.tumor_types import TumorType
 from app.services.evidence import (
     build_computational_evidence,
+    build_functional_evidence,
     build_hotspots_evidence,
-    build_not_available_evidence,
     build_population_evidence,
+    build_predictive_evidence,
 )
 from app.services.scoring import calculate_overall_score
 
 
 def build_prediction_summary_from_annotated_variant(
     annotated_variant: AnnotatedVariant,
+    tumor_type: TumorType | None = None,
 ) -> OncogenicityPredictionSummary:
     """Assemble all pipeline evidence results and compute the current overall score."""
     evidence = OncogenicityEvidence(
         population=build_population_evidence(annotated_variant),
         computational=build_computational_evidence(annotated_variant),
         hotspots=build_hotspots_evidence(annotated_variant),
-        predictive=build_not_available_evidence(
-            "Predictive evidence is not yet implemented in the prediction pipeline."
+        predictive=build_predictive_evidence(
+            annotated_variant,
+            tumor_type=tumor_type,
         ),
-        functional=build_not_available_evidence(
-            "Functional evidence is not yet implemented in the prediction pipeline."
-        ),
+        functional=build_functional_evidence(annotated_variant, tumor_type=tumor_type),
     )
 
     return OncogenicityPredictionSummary(

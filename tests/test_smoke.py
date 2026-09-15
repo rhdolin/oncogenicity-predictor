@@ -6,7 +6,10 @@ from app.main import app
 from app.models.annotated_variant import AnnotatedVariant, BasicAnnotation, TranscriptConsequence
 from app.models.normalized_variant import NormalizationMetadata, NormalizedVariant
 from app.services.annotation import variant_annotator
+from app.services.evidence import functional
+from app.services.evidence import gene_roles
 from app.services.evidence import hotspots
+from app.services.evidence import predictive
 from app.services.normalization import variant_normalizer
 
 
@@ -168,6 +171,10 @@ def stub_clingen_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda normalized_variant: VEP_SAMPLE_RECORD,
     )
     monkeypatch.setattr(hotspots, "_get_hotspot_index", lambda: EMPTY_HOTSPOT_INDEX)
+    monkeypatch.setattr(predictive, "search_clinvar_variation_ids", lambda query, retmax=100: [])
+    monkeypatch.setattr(predictive, "fetch_clinvar_summaries", lambda variation_ids: {})
+    functional._GENE_INDEX_CACHE.clear()
+    gene_roles.load_gene_roles.cache_clear()
 
 
 def test_root_exposes_docs() -> None:
@@ -234,7 +241,11 @@ def test_predict_single_returns_observation() -> None:
     assert "dataAbsentReason" not in hotspots
 
     predictive = _component_by_code(body, "predictive-evidence")
-    assert predictive["dataAbsentReason"]["coding"][0]["code"] == "unsupported"
+    assert predictive["valueInteger"] == 0
+    assert predictive["interpretation"][0]["text"] == (
+        "Predictive evidence did not meet current scoring criteria."
+    )
+    assert "dataAbsentReason" not in predictive
 
     functional = _component_by_code(body, "functional-evidence")
     assert functional["dataAbsentReason"]["coding"][0]["code"] == "unsupported"
@@ -275,6 +286,626 @@ def test_summarize_evidence_returns_raw_summary() -> None:
     assert body["oncogenicityEvidence"]["computational"]["matchedData"]["fathmmXfCodingPrediction"] == "D"
     assert body["oncogenicityEvidence"]["hotspots"]["evidenceCode"] is None
     assert body["oncogenicityEvidence"]["hotspots"]["matchedData"]["gene"] == "FLT3"
+    assert body["oncogenicityEvidence"]["predictive"]["evidenceCode"] is None
+    assert body["oncogenicityEvidence"]["predictive"]["matchedData"]["proteinChangeOneLetter"] == "F691L"
+
+
+def test_functional_gene_not_in_retained_panel_is_not_available() -> None:
+    response = client.get(
+        "/summarizeEvidence",
+        params={"variant": "NM_004119.3:c.2073T>G"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    functional_evidence = body["oncogenicityEvidence"]["functional"]
+    assert functional_evidence["status"] == "not_available"
+    assert functional_evidence["matchedData"]["gene"] == "FLT3"
+
+
+def test_functional_atm_match_applies_os2(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    clinmave_dir = tmp_path / "clinmave"
+    clinmave_dir.mkdir()
+    (clinmave_dir / "variants.ATM.csv").write_text(
+        '"Identifier","Chrom","Position","Ref/Alt","Gene name","Score","Dataset ID","Molecular consequence","Functional description","Phenotype","Cross-assay hits","Functional classification","ClinVar information","Population frequency","TCGA summary","MAVE technique","Mutagenesis strategy","Publication"\n'  # noqa: E501
+        '"NM_000051.4(ATM):c.283C>T (p.Gln95Ter)","chr11","108229275","C/T","ATM","-0.315","dataset0078","Nonsense","Reduced ATM function in model system","ATM-mediated anti-cell growth with Olaparib","5","Loss-of-function","Pathogenic/Likely pathogenic","6.19792e-07","NA","CRISPR-Based Genome Editing","Base editing","33606978"\n',  # noqa: E501
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(functional, "CLINMAVE_DATA_DIR", clinmave_dir)
+    functional._GENE_INDEX_CACHE.clear()
+
+    atm_record = {
+        "@id": "http://reg.genome.network/allele/CA164660",
+        "genomicAlleles": [
+            {
+                "chromosome": "11",
+                "coordinates": [
+                    {
+                        "allele": "T",
+                        "end": 108229275,
+                        "referenceAllele": "C",
+                        "start": 108229274,
+                    }
+                ],
+                "hgvs": ["NC_000011.10:g.108229275C>T"],
+                "referenceGenome": "GRCh38",
+            }
+        ],
+        "transcriptAlleles": [
+            {
+                "geneSymbol": "ATM",
+                "geneNCBI_id": 472,
+                "hgvs": ["NM_000051.4:c.283C>T"],
+                "genomeAlignments": [
+                    {
+                        "referenceGenome": "GRCh37",
+                        "chromosome": "11",
+                        "start": 108100001,
+                        "end": 108100002,
+                    }
+                ],
+                "proteinEffect": {
+                    "hgvs": "NP_000042.3:p.Gln95Ter",
+                    "hgvsWellDefined": "NP_000042.3:p.Gln95Ter",
+                },
+                "MANE": {
+                    "maneStatus": "MANE Select",
+                    "nucleotide": {
+                        "RefSeq": {
+                            "hgvs": "NM_000051.4:c.283C>T",
+                        }
+                    },
+                    "protein": {
+                        "RefSeq": {
+                            "hgvs": "NP_000042.3:p.Gln95Ter",
+                        }
+                    },
+                },
+            }
+        ],
+    }
+
+    atm_vep_record = {
+        **VEP_SAMPLE_RECORD,
+        "input": "NC_000011.10:g.108229275C>T",
+        "most_severe_consequence": "stop_gained",
+        "transcript_consequences": [
+            {
+                "transcript_id": "NM_000051.4",
+                "hgvsc": "NM_000051.4:c.283C>T",
+                "hgvsp": "NP_000042.3:p.Gln95Ter",
+                "mane_select": "ENST00000278616.10",
+                "mane": ["MANE_Select"],
+                "consequence_terms": ["stop_gained"],
+                "protein_start": 95,
+                "protein_end": 95,
+                "amino_acids": "Q/*",
+                "cadd_phred": 36.0,
+                "cadd_raw": 7.62,
+                "fathmm-xf_coding_pred": "N",
+                "fathmm-xf_coding_score": 0.09,
+                "fathmm-xf_coding_rankscore": 0.18,
+                "phylop100way_vertebrate": 5.8,
+                "gene_symbol": "ATM",
+            }
+        ],
+        "colocated_variants": [],
+    }
+
+    monkeypatch.setattr(
+        variant_normalizer,
+        "fetch_allele_registry_record",
+        lambda submitted_variant: atm_record,
+    )
+    monkeypatch.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: atm_vep_record,
+    )
+
+    response = client.get(
+        "/summarizeEvidence",
+        params={"variant": "NM_000051.4:c.283C>T"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    functional_evidence = body["oncogenicityEvidence"]["functional"]
+    assert functional_evidence["status"] == "applied"
+    assert functional_evidence["score"] == 4
+    assert functional_evidence["evidenceCode"] == "OS2"
+    assert functional_evidence["matchedData"]["maneSelectB38"] == "NM_000051.4:c.283C>T"
+
+
+def test_functional_atm_normal_match_applies_sbs2(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    clinmave_dir = tmp_path / "clinmave"
+    clinmave_dir.mkdir()
+    (clinmave_dir / "variants.ATM.csv").write_text(
+        '"Identifier","Chrom","Position","Ref/Alt","Gene name","Score","Dataset ID","Molecular consequence","Functional description","Phenotype","Cross-assay hits","Functional classification","ClinVar information","Population frequency","TCGA summary","MAVE technique","Mutagenesis strategy","Publication"\n'  # noqa: E501
+        '"NM_000051.4(ATM):c.283C>T (p.Gln95Ter)","chr11","108229275","C/T","ATM","-0.315","dataset0078","Nonsense","Neutral ATM function in model system","ATM-mediated anti-cell growth with Olaparib","5","Functionally normal","Pathogenic/Likely pathogenic","6.19792e-07","NA","CRISPR-Based Genome Editing","Base editing","33606978"\n',  # noqa: E501
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(functional, "CLINMAVE_DATA_DIR", clinmave_dir)
+    functional._GENE_INDEX_CACHE.clear()
+
+    atm_record = {
+        "@id": "http://reg.genome.network/allele/CA164660",
+        "genomicAlleles": [
+            {
+                "chromosome": "11",
+                "coordinates": [
+                    {
+                        "allele": "T",
+                        "end": 108229275,
+                        "referenceAllele": "C",
+                        "start": 108229274,
+                    }
+                ],
+                "hgvs": ["NC_000011.10:g.108229275C>T"],
+                "referenceGenome": "GRCh38",
+            }
+        ],
+        "transcriptAlleles": [
+            {
+                "geneSymbol": "ATM",
+                "geneNCBI_id": 472,
+                "hgvs": ["NM_000051.4:c.283C>T"],
+                "genomeAlignments": [
+                    {
+                        "referenceGenome": "GRCh37",
+                        "chromosome": "11",
+                        "start": 108100001,
+                        "end": 108100002,
+                    }
+                ],
+                "proteinEffect": {
+                    "hgvs": "NP_000042.3:p.Gln95Ter",
+                    "hgvsWellDefined": "NP_000042.3:p.Gln95Ter",
+                },
+                "MANE": {
+                    "maneStatus": "MANE Select",
+                    "nucleotide": {
+                        "RefSeq": {
+                            "hgvs": "NM_000051.4:c.283C>T",
+                        }
+                    },
+                    "protein": {
+                        "RefSeq": {
+                            "hgvs": "NP_000042.3:p.Gln95Ter",
+                        }
+                    },
+                },
+            }
+        ],
+    }
+
+    atm_vep_record = {
+        **VEP_SAMPLE_RECORD,
+        "input": "NC_000011.10:g.108229275C>T",
+        "most_severe_consequence": "stop_gained",
+        "transcript_consequences": [
+            {
+                "transcript_id": "NM_000051.4",
+                "hgvsc": "NM_000051.4:c.283C>T",
+                "hgvsp": "NP_000042.3:p.Gln95Ter",
+                "mane_select": "ENST00000278616.10",
+                "mane": ["MANE_Select"],
+                "consequence_terms": ["stop_gained"],
+                "protein_start": 95,
+                "protein_end": 95,
+                "amino_acids": "Q/*",
+                "cadd_phred": 36.0,
+                "cadd_raw": 7.62,
+                "fathmm-xf_coding_pred": "N",
+                "fathmm-xf_coding_score": 0.09,
+                "fathmm-xf_coding_rankscore": 0.18,
+                "phylop100way_vertebrate": 5.8,
+                "gene_symbol": "ATM",
+            }
+        ],
+        "colocated_variants": [],
+    }
+
+    monkeypatch.setattr(
+        variant_normalizer,
+        "fetch_allele_registry_record",
+        lambda submitted_variant: atm_record,
+    )
+    monkeypatch.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: atm_vep_record,
+    )
+
+    response = client.get(
+        "/summarizeEvidence",
+        params={"variant": "NM_000051.4:c.283C>T"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    functional_evidence = body["oncogenicityEvidence"]["functional"]
+    assert functional_evidence["status"] == "applied"
+    assert functional_evidence["score"] == -4
+    assert functional_evidence["evidenceCode"] == "SBS2"
+
+
+def test_functional_gata3_requires_tumor_type(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    clinmave_dir = tmp_path / "clinmave"
+    clinmave_dir.mkdir()
+    (clinmave_dir / "variants.GATA3.csv").write_text(
+        '"Identifier","Chrom","Position","Ref/Alt","Gene name","Score","Dataset ID","Molecular consequence","Functional description","Phenotype","Cross-assay hits","Functional classification","ClinVar information","Population frequency","TCGA summary","MAVE technique","Mutagenesis strategy","Publication"\n'  # noqa: E501
+        '"NM_001002295.2(GATA3):c.1A>G (p.Met1Val)","chr10","8045419","A/G","GATA3","1.0","dataset0001","Missense","Activating effect in model system","example phenotype","1","Gain-of-function","","","NA","Deep Mutational Scanning","Saturation mutagenesis","12345678"\n',  # noqa: E501
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(functional, "CLINMAVE_DATA_DIR", clinmave_dir)
+    functional._GENE_INDEX_CACHE.clear()
+
+    gata3_record = {
+        "@id": "http://reg.genome.network/allele/CATEST",
+        "genomicAlleles": [
+            {
+                "chromosome": "10",
+                "coordinates": [
+                    {
+                        "allele": "G",
+                        "end": 8045419,
+                        "referenceAllele": "A",
+                        "start": 8045418,
+                    }
+                ],
+                "hgvs": ["NC_000010.11:g.8045419A>G"],
+                "referenceGenome": "GRCh38",
+            }
+        ],
+        "transcriptAlleles": [
+            {
+                "geneSymbol": "GATA3",
+                "geneNCBI_id": 2625,
+                "hgvs": ["NM_001002295.2:c.1A>G"],
+                "genomeAlignments": [
+                    {
+                        "referenceGenome": "GRCh37",
+                        "chromosome": "10",
+                        "start": 8116649,
+                        "end": 8116650,
+                    }
+                ],
+                "proteinEffect": {
+                    "hgvs": "NP_001002295.1:p.Met1Val",
+                    "hgvsWellDefined": "NP_001002295.1:p.Met1Val",
+                },
+                "MANE": {
+                    "maneStatus": "MANE Select",
+                    "nucleotide": {
+                        "RefSeq": {
+                            "hgvs": "NM_001002295.2:c.1A>G",
+                        }
+                    },
+                    "protein": {
+                        "RefSeq": {
+                            "hgvs": "NP_001002295.1:p.Met1Val",
+                        }
+                    },
+                },
+            }
+        ],
+    }
+
+    gata3_vep_record = {
+        **VEP_SAMPLE_RECORD,
+        "input": "NC_000010.11:g.8045419A>G",
+        "most_severe_consequence": "missense_variant",
+        "transcript_consequences": [
+            {
+                "transcript_id": "NM_001002295.2",
+                "hgvsc": "NM_001002295.2:c.1A>G",
+                "hgvsp": "NP_001002295.1:p.Met1Val",
+                "mane_select": "ENST00000379328.9",
+                "mane": ["MANE_Select"],
+                "consequence_terms": ["missense_variant"],
+                "protein_start": 1,
+                "protein_end": 1,
+                "amino_acids": "M/V",
+                "cadd_phred": 22.0,
+                "cadd_raw": 4.1,
+                "fathmm-xf_coding_pred": "D",
+                "fathmm-xf_coding_score": 0.8,
+                "fathmm-xf_coding_rankscore": 0.7,
+                "phylop100way_vertebrate": 4.0,
+                "gene_symbol": "GATA3",
+            }
+        ],
+        "colocated_variants": [],
+    }
+
+    monkeypatch.setattr(
+        variant_normalizer,
+        "fetch_allele_registry_record",
+        lambda submitted_variant: gata3_record,
+    )
+    monkeypatch.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: gata3_vep_record,
+    )
+
+    response_without_tumor = client.get(
+        "/summarizeEvidence",
+        params={"variant": "NM_001002295.2:c.1A>G"},
+    )
+    response_with_tumor = client.get(
+        "/summarizeEvidence",
+        params={
+            "variant": "NM_001002295.2:c.1A>G",
+            "tumorType": "Hodgkin Lymphoma",
+        },
+    )
+
+    assert response_without_tumor.status_code == 200
+    functional_without_tumor = response_without_tumor.json()["oncogenicityEvidence"]["functional"]
+    assert functional_without_tumor["status"] == "not_available"
+
+    assert response_with_tumor.status_code == 200
+    functional_with_tumor = response_with_tumor.json()["oncogenicityEvidence"]["functional"]
+    assert functional_with_tumor["status"] == "applied"
+    assert functional_with_tumor["evidenceCode"] == "OS2"
+
+
+def test_predictive_gata3_uses_tumor_type_for_ovs1(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gata3_record = {
+        "@id": "http://reg.genome.network/allele/CATEST3",
+        "genomicAlleles": [
+            {
+                "chromosome": "10",
+                "coordinates": [
+                    {
+                        "allele": "A",
+                        "end": 8055658,
+                        "referenceAllele": "G",
+                        "start": 8055657,
+                    }
+                ],
+                "hgvs": ["NC_000010.11:g.8055658G>A"],
+                "referenceGenome": "GRCh38",
+            }
+        ],
+        "transcriptAlleles": [
+            {
+                "geneSymbol": "GATA3",
+                "geneNCBI_id": 2625,
+                "hgvs": ["NM_001002295.2:c.3G>A"],
+                "genomeAlignments": [
+                    {
+                        "referenceGenome": "GRCh37",
+                        "chromosome": "10",
+                        "start": 8116731,
+                        "end": 8116732,
+                    }
+                ],
+                "proteinEffect": {
+                    "hgvs": "NP_001002295.1:p.Met1Ile",
+                    "hgvsWellDefined": "NP_001002295.1:p.Met1Ile",
+                },
+                "MANE": {
+                    "maneStatus": "MANE Select",
+                    "nucleotide": {
+                        "RefSeq": {
+                            "hgvs": "NM_001002295.2:c.3G>A",
+                        }
+                    },
+                    "protein": {
+                        "RefSeq": {
+                            "hgvs": "NP_001002295.1:p.Met1Ile",
+                        }
+                    },
+                },
+            }
+        ],
+    }
+
+    gata3_vep_record = {
+        **VEP_SAMPLE_RECORD,
+        "input": "NC_000010.11:g.8055658G>A",
+        "most_severe_consequence": "start_lost",
+        "transcript_consequences": [
+            {
+                "transcript_id": "NM_001002295.2",
+                "hgvsc": "NM_001002295.2:c.3G>A",
+                "hgvsp": "NP_001002295.1:p.Met1Ile",
+                "mane_select": "ENST00000379328.9",
+                "mane": ["MANE_Select"],
+                "consequence_terms": ["start_lost"],
+                "protein_start": 1,
+                "protein_end": 1,
+                "amino_acids": "M/I",
+                "cadd_phred": 27.8,
+                "cadd_raw": 4.97372,
+                "fathmm-xf_coding_pred": "N",
+                "fathmm-xf_coding_score": 0.099101,
+                "fathmm-xf_coding_rankscore": 0.19857,
+                "phylop100way_vertebrate": 9.496,
+                "gene_symbol": "GATA3",
+            }
+        ],
+        "colocated_variants": [],
+    }
+
+    monkeypatch.setattr(
+        variant_normalizer,
+        "fetch_allele_registry_record",
+        lambda submitted_variant: gata3_record,
+    )
+    monkeypatch.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: gata3_vep_record,
+    )
+
+    response_without_tumor = client.get(
+        "/summarizeEvidence",
+        params={"variant": "NM_001002295.2:c.3G>A"},
+    )
+    response_tsg = client.get(
+        "/summarizeEvidence",
+        params={
+            "variant": "NM_001002295.2:c.3G>A",
+            "tumorType": "Breast Cancer",
+        },
+    )
+    response_oncogene = client.get(
+        "/summarizeEvidence",
+        params={
+            "variant": "NM_001002295.2:c.3G>A",
+            "tumorType": "Hodgkin Lymphoma",
+        },
+    )
+
+    predictive_without_tumor = response_without_tumor.json()["oncogenicityEvidence"][
+        "predictive"
+    ]
+    assert predictive_without_tumor["status"] == "not_available"
+    assert "requires tumor type" in predictive_without_tumor["evidenceStatement"]
+
+    predictive_tsg = response_tsg.json()["oncogenicityEvidence"]["predictive"]
+    assert predictive_tsg["status"] == "applied"
+    assert predictive_tsg["score"] == 8
+    assert predictive_tsg["evidenceCode"] == "OVS1"
+    assert predictive_tsg["matchedData"]["resolvedGeneRole"] == "tsg"
+
+    predictive_oncogene = response_oncogene.json()["oncogenicityEvidence"]["predictive"]
+    assert predictive_oncogene["status"] == "applied"
+    assert predictive_oncogene["score"] == 0
+    assert predictive_oncogene["evidenceCode"] is None
+    assert predictive_oncogene["matchedData"]["resolvedGeneRole"] == "oncogene"
+    assert predictive_oncogene["evidenceStatement"] == (
+        "Predictive evidence did not meet current scoring criteria."
+    )
+
+
+def test_functional_conflicting_clinmave_rows_return_applied_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    clinmave_dir = tmp_path / "clinmave"
+    clinmave_dir.mkdir()
+    (clinmave_dir / "variants.ATM.csv").write_text(
+        '"Identifier","Chrom","Position","Ref/Alt","Gene name","Score","Dataset ID","Molecular consequence","Functional description","Phenotype","Cross-assay hits","Functional classification","ClinVar information","Population frequency","TCGA summary","MAVE technique","Mutagenesis strategy","Publication"\n'  # noqa: E501
+        '"NM_000051.4(ATM):c.797G>A (p.Trp266Ter)","chr11","108244922","G/A","ATM","-1.0","dataset0001","Nonsense","Reduced ATM activity","ATM phenotype","5","Loss-of-function","","","NA","CRISPR-Based Genome Editing","Base editing","12345678"\n'  # noqa: E501
+        '"NM_000051.4(ATM):c.797G>A (p.Trp266Ter)","chr11","108244922","G/A","ATM","0.5","dataset0002","Nonsense","Neutral ATM activity","ATM phenotype","5","Functionally normal","","","NA","CRISPR-Based Genome Editing","Base editing","12345678"\n',  # noqa: E501
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(functional, "CLINMAVE_DATA_DIR", clinmave_dir)
+    functional._GENE_INDEX_CACHE.clear()
+
+    atm_record = {
+        "@id": "http://reg.genome.network/allele/CATEST2",
+        "genomicAlleles": [
+            {
+                "chromosome": "11",
+                "coordinates": [
+                    {
+                        "allele": "A",
+                        "end": 108244922,
+                        "referenceAllele": "G",
+                        "start": 108244921,
+                    }
+                ],
+                "hgvs": ["NC_000011.10:g.108244922G>A"],
+                "referenceGenome": "GRCh38",
+            }
+        ],
+        "transcriptAlleles": [
+            {
+                "geneSymbol": "ATM",
+                "geneNCBI_id": 472,
+                "hgvs": ["NM_000051.4:c.797G>A"],
+                "genomeAlignments": [
+                    {
+                        "referenceGenome": "GRCh37",
+                        "chromosome": "11",
+                        "start": 108111262,
+                        "end": 108111263,
+                    }
+                ],
+                "proteinEffect": {
+                    "hgvs": "NP_000042.3:p.Trp266Ter",
+                    "hgvsWellDefined": "NP_000042.3:p.Trp266Ter",
+                },
+                "MANE": {
+                    "maneStatus": "MANE Select",
+                    "nucleotide": {
+                        "RefSeq": {
+                            "hgvs": "NM_000051.4:c.797G>A",
+                        }
+                    },
+                    "protein": {
+                        "RefSeq": {
+                            "hgvs": "NP_000042.3:p.Trp266Ter",
+                        }
+                    },
+                },
+            }
+        ],
+    }
+
+    atm_vep_record = {
+        **VEP_SAMPLE_RECORD,
+        "input": "NC_000011.10:g.108244922G>A",
+        "most_severe_consequence": "stop_gained",
+        "transcript_consequences": [
+            {
+                "transcript_id": "NM_000051.4",
+                "hgvsc": "NM_000051.4:c.797G>A",
+                "hgvsp": "NP_000042.3:p.Trp266Ter",
+                "mane_select": "ENST00000278616.10",
+                "mane": ["MANE_Select"],
+                "consequence_terms": ["stop_gained"],
+                "protein_start": 266,
+                "protein_end": 266,
+                "amino_acids": "W/*",
+                "cadd_phred": 36.0,
+                "cadd_raw": 7.0,
+                "fathmm-xf_coding_pred": "D",
+                "fathmm-xf_coding_score": 0.9,
+                "fathmm-xf_coding_rankscore": 0.9,
+                "phylop100way_vertebrate": 5.0,
+                "gene_symbol": "ATM",
+            }
+        ],
+        "colocated_variants": [],
+    }
+
+    monkeypatch.setattr(
+        variant_normalizer,
+        "fetch_allele_registry_record",
+        lambda submitted_variant: atm_record,
+    )
+    monkeypatch.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: atm_vep_record,
+    )
+
+    response = client.get(
+        "/summarizeEvidence",
+        params={"variant": "NM_000051.4:c.797G>A"},
+    )
+
+    assert response.status_code == 200
+    functional_evidence = response.json()["oncogenicityEvidence"]["functional"]
+    assert functional_evidence["status"] == "applied"
+    assert functional_evidence["score"] == 0
+    assert "conflicting functional classifications" in functional_evidence["evidenceStatement"]
+    assert functional_evidence["dataAbsentReason"] is None
+    assert functional_evidence["matchedData"]["matchingRowCount"] == 2
 
 
 def test_predict_batch_returns_observations() -> None:
@@ -288,7 +919,371 @@ def test_predict_batch_returns_observations() -> None:
     assert len(body["observations"]) == 2
     assert body["observations"][0]["valueInteger"] == 2
     assert body["observations"][1]["valueInteger"] == 2
-    assert body["observations"][1]["extension"][0]["valueString"] == "ENST00000241453.12:c.2073T>G"
+
+
+def test_predictive_os1_matches_exact_protein_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        predictive,
+        "search_clinvar_variation_ids",
+        lambda query, retmax=100: ["40364", "13964"],
+    )
+    monkeypatch.setattr(
+        predictive,
+        "fetch_clinvar_summaries",
+        lambda variation_ids: {
+            "40364": {
+                "protein_change": "G464V, G427V, G376V, G442V, G412V, G430V, G467V, G504V",
+                "oncogenicity_classification": {"description": "Oncogenic"},
+                "title": "NM_004333.6(BRAF):c.1391G>T (p.Gly464Val)",
+            },
+            "13964": {
+                "protein_change": "G464E, G427E, G442E, G504E, G412E, G467E, G376E, G430E",
+                "oncogenicity_classification": {"description": "Oncogenic"},
+                "title": "NM_004333.6(BRAF):c.1391G>A (p.Gly464Glu)",
+            },
+        },
+    )
+
+    braf_record = {
+        **CLINGEN_SAMPLE_RECORD,
+        "transcriptAlleles": [
+            {
+                "geneSymbol": "BRAF",
+                "geneNCBI_id": 673,
+                "hgvs": ["NM_004333.6:c.1391G>T"],
+                "genomeAlignments": [
+                    {
+                        "referenceGenome": "GRCh37",
+                        "chromosome": "7",
+                        "start": 140453135,
+                        "end": 140453135,
+                    }
+                ],
+                "proteinEffect": {
+                    "hgvs": "NP_004324.2:p.Gly464Val",
+                    "hgvsWellDefined": "NP_004324.2:p.Gly464Val",
+                },
+                "MANE": {
+                    "maneStatus": "MANE Select",
+                    "nucleotide": {
+                        "RefSeq": {
+                            "hgvs": "NM_004333.6:c.1391G>T",
+                        }
+                    },
+                    "protein": {
+                        "RefSeq": {
+                            "hgvs": "NP_004324.2:p.Gly464Val",
+                        }
+                    },
+                },
+            }
+        ],
+    }
+
+    original_fetch = variant_normalizer.fetch_allele_registry_record
+    try:
+        variant_normalizer.fetch_allele_registry_record = lambda submitted_variant: braf_record
+        response = client.get(
+            "/summarizeEvidence",
+            params={"variant": "NC_000007.14:g.140781617C>A"},
+        )
+    finally:
+        variant_normalizer.fetch_allele_registry_record = original_fetch
+
+    assert response.status_code == 200
+    body = response.json()
+    predictive_evidence = body["oncogenicityEvidence"]["predictive"]
+    assert predictive_evidence["score"] == 4
+    assert predictive_evidence["evidenceCode"] == "OS1"
+    assert predictive_evidence["matchedData"]["matchedVariationId"] == "40364"
+    assert predictive_evidence["matchedData"]["proteinChangeOneLetter"] == "G464V"
+
+
+def test_predictive_os1_rejects_same_residue_different_protein_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        predictive,
+        "search_clinvar_variation_ids",
+        lambda query, retmax=100: ["13964"],
+    )
+    monkeypatch.setattr(
+        predictive,
+        "fetch_clinvar_summaries",
+        lambda variation_ids: {
+            "13964": {
+                "protein_change": "G464E, G427E, G442E, G504E, G412E, G467E, G376E, G430E",
+                "oncogenicity_classification": {"description": "Oncogenic"},
+                "title": "NM_004333.6(BRAF):c.1391G>A (p.Gly464Glu)",
+            }
+        },
+    )
+
+    braf_record = {
+        **CLINGEN_SAMPLE_RECORD,
+        "transcriptAlleles": [
+            {
+                "geneSymbol": "BRAF",
+                "geneNCBI_id": 673,
+                "hgvs": ["NM_004333.6:c.1391G>T"],
+                "genomeAlignments": [
+                    {
+                        "referenceGenome": "GRCh37",
+                        "chromosome": "7",
+                        "start": 140453135,
+                        "end": 140453135,
+                    }
+                ],
+                "proteinEffect": {
+                    "hgvs": "NP_004324.2:p.Gly464Val",
+                    "hgvsWellDefined": "NP_004324.2:p.Gly464Val",
+                },
+                "MANE": {
+                    "maneStatus": "MANE Select",
+                    "nucleotide": {
+                        "RefSeq": {
+                            "hgvs": "NM_004333.6:c.1391G>T",
+                        }
+                    },
+                    "protein": {
+                        "RefSeq": {
+                            "hgvs": "NP_004324.2:p.Gly464Val",
+                        }
+                    },
+                },
+            }
+        ],
+    }
+
+    original_fetch = variant_normalizer.fetch_allele_registry_record
+    try:
+        variant_normalizer.fetch_allele_registry_record = lambda submitted_variant: braf_record
+        response = client.get(
+            "/summarizeEvidence",
+            params={"variant": "NC_000007.14:g.140781617C>A"},
+        )
+    finally:
+        variant_normalizer.fetch_allele_registry_record = original_fetch
+
+    assert response.status_code == 200
+    body = response.json()
+    predictive_evidence = body["oncogenicityEvidence"]["predictive"]
+    assert predictive_evidence["score"] == 2
+    assert predictive_evidence["evidenceCode"] == "OM4"
+
+
+def test_predictive_om4_matches_different_same_residue_oncogenic_variant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_search_clinvar_variation_ids(query: str, retmax: int = 100) -> list[str]:
+        if query == "BRAF[gene] AND G464V[varnam]":
+            return []
+        if query == "BRAF[gene] AND Gly464Val[varnam]":
+            return []
+        if query == "BRAF[gene] AND G464[varnam]":
+            return ["13964"]
+        if query == "BRAF[gene] AND Gly464[varnam]":
+            return ["13964"]
+        return []
+
+    monkeypatch.setattr(
+        predictive,
+        "search_clinvar_variation_ids",
+        fake_search_clinvar_variation_ids,
+    )
+    monkeypatch.setattr(
+        predictive,
+        "fetch_clinvar_summaries",
+        lambda variation_ids: {
+            "13964": {
+                "protein_change": "G464E, G427E, G442E, G504E, G412E, G467E, G376E, G430E",
+                "oncogenicity_classification": {"description": "Likely oncogenic"},
+                "title": "NM_004333.6(BRAF):c.1391G>A (p.Gly464Glu)",
+            }
+        },
+    )
+
+    braf_record = {
+        **CLINGEN_SAMPLE_RECORD,
+        "transcriptAlleles": [
+            {
+                "geneSymbol": "BRAF",
+                "geneNCBI_id": 673,
+                "hgvs": ["NM_004333.6:c.1391G>T"],
+                "genomeAlignments": [
+                    {
+                        "referenceGenome": "GRCh37",
+                        "chromosome": "7",
+                        "start": 140453135,
+                        "end": 140453135,
+                    }
+                ],
+                "proteinEffect": {
+                    "hgvs": "NP_004324.2:p.Gly464Val",
+                    "hgvsWellDefined": "NP_004324.2:p.Gly464Val",
+                },
+                "MANE": {
+                    "maneStatus": "MANE Select",
+                    "nucleotide": {
+                        "RefSeq": {
+                            "hgvs": "NM_004333.6:c.1391G>T",
+                        }
+                    },
+                    "protein": {
+                        "RefSeq": {
+                            "hgvs": "NP_004324.2:p.Gly464Val",
+                        }
+                    },
+                },
+            }
+        ],
+    }
+
+    original_fetch = variant_normalizer.fetch_allele_registry_record
+    try:
+        variant_normalizer.fetch_allele_registry_record = lambda submitted_variant: braf_record
+        response = client.get(
+            "/summarizeEvidence",
+            params={"variant": "NC_000007.14:g.140781617C>A"},
+        )
+    finally:
+        variant_normalizer.fetch_allele_registry_record = original_fetch
+
+    assert response.status_code == 200
+    body = response.json()
+    predictive_evidence = body["oncogenicityEvidence"]["predictive"]
+    assert predictive_evidence["score"] == 2
+    assert predictive_evidence["evidenceCode"] == "OM4"
+    assert predictive_evidence["matchedData"]["matchedVariationId"] == "13964"
+    assert predictive_evidence["matchedData"]["matchedRule"] == "OM4"
+
+
+def test_predictive_ovs1_applies_for_frameshift_in_tsg() -> None:
+    tsg_record = {
+        **CLINGEN_SAMPLE_RECORD,
+        "transcriptAlleles": [
+            {
+                **CLINGEN_SAMPLE_RECORD["transcriptAlleles"][0],
+                "geneSymbol": "TP53",
+                "geneNCBI_id": 7157,
+                "hgvs": ["NM_000546.6:c.375_376del"],
+            }
+        ],
+    }
+    frameshift_record = {
+        **VEP_SAMPLE_RECORD,
+        "most_severe_consequence": "frameshift_variant",
+        "transcript_consequences": [
+            {
+                **VEP_SAMPLE_RECORD["transcript_consequences"][0],
+                "transcript_id": "NM_000546.6",
+                "consequence_terms": ["frameshift_variant"],
+                "gene_symbol": "TP53",
+                "hgvsc": "NM_000546.6:c.375_376del",
+                "hgvsp": "NP_000537.3:p.Lys125fs",
+            }
+        ],
+    }
+
+    monkeypatch_context = pytest.MonkeyPatch()
+    monkeypatch_context.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: frameshift_record,
+    )
+    try:
+        original_fetch = variant_normalizer.fetch_allele_registry_record
+        variant_normalizer.fetch_allele_registry_record = lambda submitted_variant: tsg_record
+        response = client.get(
+            "/summarizeEvidence",
+            params={"variant": "NM_000546.6:c.375_376del"},
+        )
+    finally:
+        variant_normalizer.fetch_allele_registry_record = original_fetch
+        monkeypatch_context.undo()
+
+    assert response.status_code == 200
+    body = response.json()
+    predictive_evidence = body["oncogenicityEvidence"]["predictive"]
+    assert predictive_evidence["score"] == 8
+    assert predictive_evidence["evidenceCode"] == "OVS1"
+    assert predictive_evidence["matchedData"]["geneRole"] == "tsg"
+
+
+def test_predictive_om2_applies_for_inframe_deletion_in_oncogene() -> None:
+    inframe_deletion_record = {
+        **VEP_SAMPLE_RECORD,
+        "most_severe_consequence": "inframe_deletion",
+        "transcript_consequences": [
+            {
+                **VEP_SAMPLE_RECORD["transcript_consequences"][0],
+                "consequence_terms": ["inframe_deletion"],
+                "protein_start": 691,
+                "protein_end": 691,
+                "amino_acids": "F/-",
+                "hgvsp": "NP_004110.2:p.Phe691del",
+            }
+        ],
+    }
+
+    monkeypatch_context = pytest.MonkeyPatch()
+    monkeypatch_context.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: inframe_deletion_record,
+    )
+    try:
+        response = client.get(
+            "/summarizeEvidence",
+            params={"variant": "NM_004119.3:c.2073_2075del"},
+        )
+    finally:
+        monkeypatch_context.undo()
+
+    assert response.status_code == 200
+    body = response.json()
+    predictive_evidence = body["oncogenicityEvidence"]["predictive"]
+    assert predictive_evidence["score"] == 2
+    assert predictive_evidence["evidenceCode"] == "OM2"
+    assert predictive_evidence["matchedData"]["geneRole"] == "oncogene"
+
+
+def test_predictive_sbp2_applies_for_low_phylo_p_synonymous_variant() -> None:
+    synonymous_record = {
+        **VEP_SAMPLE_RECORD,
+        "most_severe_consequence": "synonymous_variant",
+        "transcript_consequences": [
+            {
+                **VEP_SAMPLE_RECORD["transcript_consequences"][0],
+                "consequence_terms": ["synonymous_variant"],
+                "hgvsp": "NP_004110.2:p.Phe691=",
+                "phylop100way_vertebrate": 1.2,
+                "cadd_phred": 10.1,
+                "cadd_raw": 0.1,
+            }
+        ],
+    }
+
+    monkeypatch_context = pytest.MonkeyPatch()
+    monkeypatch_context.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: synonymous_record,
+    )
+    try:
+        response = client.get(
+            "/summarizeEvidence",
+            params={"variant": "NM_004119.3:c.2073T>C"},
+        )
+    finally:
+        monkeypatch_context.undo()
+
+    assert response.status_code == 200
+    body = response.json()
+    predictive_evidence = body["oncogenicityEvidence"]["predictive"]
+    assert predictive_evidence["score"] == -1
+    assert predictive_evidence["evidenceCode"] == "SBP2"
+    assert predictive_evidence["matchedData"]["phyloP100wayVertebrate"] == 1.2
 
 
 def test_predict_single_returns_hotspot_component_when_hotspot_matches() -> None:
@@ -500,6 +1495,57 @@ def test_non_refseq_protein_effect_is_not_used() -> None:
     assert normalized_variant.protein.hgvs_protein_full is None
     assert normalized_variant.protein.hgvs_3letter is None
     assert normalized_variant.protein.hgvs_1letter is None
+
+
+def test_normalization_converts_deletion_protein_notation_to_one_letter() -> None:
+    deletion_record = {
+        **CLINGEN_SAMPLE_RECORD,
+        "transcriptAlleles": [
+            {
+                "geneSymbol": "CFTR",
+                "geneNCBI_id": 1080,
+                "hgvs": ["NM_000492.4:c.1521_1523delCTT"],
+                "genomeAlignments": [
+                    {
+                        "referenceGenome": "GRCh37",
+                        "chromosome": "7",
+                        "start": 117559592,
+                        "end": 117559594,
+                    }
+                ],
+                "proteinEffect": {
+                    "hgvs": "NP_000483.3:p.Phe508del",
+                    "hgvsWellDefined": "NP_000483.3:p.Phe508del",
+                },
+                "MANE": {
+                    "maneStatus": "MANE Select",
+                    "nucleotide": {
+                        "RefSeq": {
+                            "hgvs": "NM_000492.4:c.1521_1523delCTT",
+                        }
+                    },
+                    "protein": {
+                        "RefSeq": {
+                            "hgvs": "NP_000483.3:p.Phe508del",
+                        }
+                    },
+                },
+            }
+        ],
+    }
+
+    original_fetch = variant_normalizer.fetch_allele_registry_record
+    try:
+        variant_normalizer.fetch_allele_registry_record = lambda submitted_variant: deletion_record
+        normalized_variant = variant_normalizer.normalize_variant("NM_000492.4:c.1521_1523delCTT")
+    finally:
+        variant_normalizer.fetch_allele_registry_record = original_fetch
+
+    assert normalized_variant.protein.hgvs_protein_full == "NP_000483.3:p.Phe508del"
+    assert normalized_variant.protein.hgvs_3letter == "p.Phe508del"
+    assert normalized_variant.protein.hgvs_1letter == "p.F508del"
+    assert normalized_variant.protein.short_name == "F508del"
+    assert normalized_variant.protein.civic_profile_name == "CFTR F508del"
 
 
 def test_non_nc_nm_values_are_not_used() -> None:
@@ -967,7 +2013,7 @@ def test_predict_single_returns_no_computational_code_for_low_cadd_non_missense(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["valueInteger"] == 1
+    assert body["valueInteger"] == 3
     computational = _component_by_code(body, "computational-evidence")
     assert computational["valueInteger"] == 0
     assert computational["interpretation"][0]["coding"] == []
@@ -975,6 +2021,9 @@ def test_predict_single_returns_no_computational_code_for_low_cadd_non_missense(
         "Computational missense benign rules were not applicable because the most severe consequence "
         "was inframe_deletion."
     )
+    predictive = _component_by_code(body, "predictive-evidence")
+    assert predictive["valueInteger"] == 2
+    assert predictive["interpretation"][0]["coding"][0]["code"] == "OM2"
 
 
 def test_predict_single_returns_sbvs1_for_high_population_frequency() -> None:

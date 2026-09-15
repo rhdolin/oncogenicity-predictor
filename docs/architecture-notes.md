@@ -23,7 +23,7 @@
 ## Current Implementation Slice
 
 - The deployed API has already been validated on Render.
-- The current non-stub implementation slice is variant normalization, first-pass annotation, the population and computational evidence pipelines, and initial FHIR Observation rendering.
+- The current non-stub implementation slice is variant normalization, first-pass annotation, the population, computational, hotspot, predictive, and functional evidence pipelines, and initial FHIR Observation rendering.
 - `GET /annotateVariant` returns the internal annotation-layer result, `GET /summarizeEvidence` returns the raw evidence summary before FHIR mapping, and `GET /predictOncogenicity` plus `POST /predictOncogenicity` return FHIR Observation-style prediction payloads.
 - Submitted variants must currently be provided in HGVS format.
 - The route layer calls orchestration entrypoints. The annotation-only flow delegates to the ClinGen-backed variant normalizer and then the VEP-backed variant annotator, while the prediction flow continues through evidence building, score aggregation, and FHIR Observation mapping.
@@ -48,10 +48,45 @@
 ## Evidence Pipelines
 
 - Population data: Ensembl VEP co-located variant frequencies from gnomAD exomes (`gnomade*`) and gnomAD genomes (`gnomadg*`)
-- Functional data: primarily MaveDB
+- Functional data: retained local ClinMAVE per-gene CSV exports
 - Predictive data: VEP and ClinVar
 - Cancer hotspots
 - Computational evidence: broad `OP1` support from high `CADD`, plus missense-only `SBP1` benign concordance with `FATHMM-XF`
+
+Functional evidence currently uses exact MANE transcript HGVS matching against ClinMAVE `Identifier` values after local normalization of the ClinMAVE identifier string. A lazy in-memory per-gene cache is used so the service reads one ClinMAVE CSV on first use rather than preloading the full retained panel at startup.
+
+The current retained ClinMAVE panel is:
+
+- `BRAF`
+- `KRAS`
+- `NRAS`
+- `HRAS`
+- `EGFR`
+- `ERBB2`
+- `ALK`
+- `MET`
+- `PIK3CA`
+- `AKT1`
+- `PTEN`
+- `TP53`
+- `NF1`
+- `ARID1A`
+- `SMAD4`
+- `JAK2`
+- `BRCA1`
+- `BRCA2`
+- `ATM`
+- `CHEK2`
+- `VHL`
+- `BAP1`
+- `CDK4`
+- `CDK6`
+- `GATA3`
+- `MYC`
+
+`data/clinmave/genes.txt` is the source-of-truth manifest for that retained local panel.
+
+Prediction and evidence-summary endpoints now also accept an optional `tumorType` input for context-dependent evidence logic. The current concrete use case is `GATA3`, which can resolve to oncogene or tumor suppressor gene behavior depending on tumor type.
 
 The detailed rule specification for these pipelines and the final score layer lives in `docs/evidence-and-scoring.md`.
 

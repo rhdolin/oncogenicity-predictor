@@ -268,17 +268,14 @@ def _convert_three_letter_protein_hgvs(hgvs_value: str | None) -> str | None:
     if not hgvs_value:
         return None
 
-    match = re.match(r"^p\.([A-Z][a-z]{2})(\d+)([A-Z][a-z]{2}|Ter)$", hgvs_value)
-    if not match:
-        return hgvs_value
+    def replace_match(match: re.Match[str]) -> str:
+        return AMINO_ACID_THREE_TO_ONE.get(match.group(0), match.group(0))
 
-    ref_amino_acid, position, alt_amino_acid = match.groups()
-    ref_one_letter = AMINO_ACID_THREE_TO_ONE.get(ref_amino_acid)
-    alt_one_letter = AMINO_ACID_THREE_TO_ONE.get(alt_amino_acid)
-    if not ref_one_letter or not alt_one_letter:
-        return hgvs_value
-
-    return f"p.{ref_one_letter}{position}{alt_one_letter}"
+    return re.sub(
+        r"Ala|Arg|Asn|Asp|Cys|Gln|Glu|Gly|His|Ile|Leu|Lys|Met|Phe|Pro|Ser|Thr|Trp|Tyr|Val|Ter",
+        replace_match,
+        hgvs_value,
+    )
 
 
 def _select_preferred_hgvs(hgvs_values: list[str], prefixes: tuple[str, ...]) -> str | None:

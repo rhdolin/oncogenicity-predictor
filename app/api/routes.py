@@ -14,6 +14,7 @@ from app.models.prediction import (
     OncogenicityPredictionSummary,
 )
 from app.models.requests import BatchRequest
+from app.models.tumor_types import TUMOR_TYPE_VALUES, TumorType
 from app.services.normalization.variant_normalizer import VariantNormalizationError
 from app.services.orchestration.single_variant_pipeline import (
     run_single_variant_annotation_pipeline,
@@ -33,18 +34,27 @@ def _annotate_variant_or_raise(submitted_variant: str) -> AnnotatedVariant:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _predict_variant_or_raise(submitted_variant: str) -> OncogenicityObservation:
+def _predict_variant_or_raise(
+    submitted_variant: str,
+    tumor_type: TumorType | None = None,
+) -> OncogenicityObservation:
     """Run the FHIR prediction pipeline and translate normalization failures into HTTP 400 errors."""
     try:
-        return run_single_variant_pipeline(submitted_variant)
+        return run_single_variant_pipeline(submitted_variant, tumor_type=tumor_type)
     except VariantNormalizationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _summarize_variant_or_raise(submitted_variant: str) -> OncogenicityPredictionSummary:
+def _summarize_variant_or_raise(
+    submitted_variant: str,
+    tumor_type: TumorType | None = None,
+) -> OncogenicityPredictionSummary:
     """Run the internal evidence-summary pipeline and translate normalization failures into HTTP 400 errors."""
     try:
-        return run_single_variant_evidence_summary_pipeline(submitted_variant)
+        return run_single_variant_evidence_summary_pipeline(
+            submitted_variant,
+            tumor_type=tumor_type,
+        )
     except VariantNormalizationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -60,7 +70,8 @@ def _summarize_variant_or_raise(submitted_variant: str) -> OncogenicityPredictio
         "the currently implemented evidence pipelines, and returns a single "
         "FHIR Observation-style prediction object with `issued`, a custom "
         "extension carrying the submitted variant, an overall score, "
-        "and one component per evidence pipeline."
+        "and one component per evidence pipeline. Also accepts an optional "
+        "`tumorType` query parameter used by context-dependent evidence rules."
     ),
 )
 def predict_single(
@@ -68,9 +79,14 @@ def predict_single(
         description="Variant to normalize. Must be provided in HGVS format.",
         examples=["NM_004119.3:c.2073T>G"],
     ),
+    tumorType: TumorType | None = Query(
+        default=None,
+        description="Optional tumor type used for context-dependent evidence rules.",
+        examples=list(TUMOR_TYPE_VALUES),
+    ),
 ) -> OncogenicityObservation:
     """Handle GET requests for a single clinician-facing FHIR prediction."""
-    return _predict_variant_or_raise(variant)
+    return _predict_variant_or_raise(variant, tumor_type=tumorType)
 
 
 @router.get(
@@ -103,7 +119,8 @@ def annotate_single(
         "Internal/debug endpoint. Accepts one submitted variant in HGVS format, "
         "normalizes it through the ClinGen Allele Registry, annotates it through "
         "Ensembl VEP, evaluates the currently implemented evidence pipelines, "
-        "and returns the raw evidence summary JSON before FHIR Observation mapping."
+        "and returns the raw evidence summary JSON before FHIR Observation mapping. "
+        "Also accepts an optional `tumorType` query parameter used by context-dependent evidence rules."
     ),
 )
 def summarize_single(
@@ -111,9 +128,14 @@ def summarize_single(
         description="Variant to summarize. Must be provided in HGVS format.",
         examples=["NM_004119.3:c.2073T>G"],
     ),
+    tumorType: TumorType | None = Query(
+        default=None,
+        description="Optional tumor type used for context-dependent evidence rules.",
+        examples=list(TUMOR_TYPE_VALUES),
+    ),
 ) -> OncogenicityPredictionSummary:
     """Handle GET requests for the raw evidence summary before FHIR mapping."""
-    return _summarize_variant_or_raise(variant)
+    return _summarize_variant_or_raise(variant, tumor_type=tumorType)
 
 
 @router.post(
@@ -127,10 +149,14 @@ def summarize_single(
         "currently implemented evidence pipelines, and returns a list of "
         "FHIR Observation-style prediction objects. Variants with annotation "
         "failures are returned in-band as partial observations with pipeline "
-        "`dataAbsentReason` values rather than failing the whole batch."
+        "`dataAbsentReason` values rather than failing the whole batch. The request body "
+        "also accepts an optional top-level `tumorType` field applied to each batch entry."
     ),
 )
 def predict_batch(request: BatchRequest) -> OncogenicityPredictionBatchResponse:
     """Handle batch prediction requests by running the single-variant pipeline per input."""
-    observations = [_predict_variant_or_raise(variant) for variant in request.variants]
+    observations = [
+        _predict_variant_or_raise(variant, tumor_type=request.tumorType)
+        for variant in request.variants
+    ]
     return OncogenicityPredictionBatchResponse(observations=observations)

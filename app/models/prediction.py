@@ -46,6 +46,10 @@ class Extension(BaseModel):
     valueString: str | None = None
 
 
+class Annotation(BaseModel):
+    text: str
+
+
 class ObservationComponent(BaseModel):
     code: CodeableConcept
     valueInteger: int | None = None
@@ -61,6 +65,7 @@ class OncogenicityObservation(BaseModel):
     valueInteger: int
     interpretation: list[CodeableConcept] = Field(default_factory=list)
     extension: list[Extension] = Field(default_factory=list)
+    note: list[Annotation] = Field(default_factory=list)
     component: list[ObservationComponent] = Field(default_factory=list)
 
 
