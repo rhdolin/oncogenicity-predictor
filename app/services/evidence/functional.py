@@ -160,7 +160,7 @@ def build_functional_evidence(
             score=4,
             evidenceCode="OS2",
             evidenceStatement=(
-                f"OS2: ClinMAVE shows gain-of-function for this variant in oncogene {gene}."
+                f"ClinMAVE shows gain-of-function for this variant in oncogene {gene}."
             ),
             status="applied",
             source="clinmave",
@@ -172,7 +172,7 @@ def build_functional_evidence(
             score=4,
             evidenceCode="OS2",
             evidenceStatement=(
-                f"OS2: ClinMAVE shows loss-of-function for this variant in tumor suppressor gene {gene}."
+                f"ClinMAVE shows loss-of-function for this variant in tumor suppressor gene {gene}."
             ),
             status="applied",
             source="clinmave",
@@ -184,7 +184,7 @@ def build_functional_evidence(
             score=-4,
             evidenceCode="SBS2",
             evidenceStatement=(
-                f"SBS2: ClinMAVE shows functionally normal activity for this variant in oncogene {gene}."
+                f"ClinMAVE shows functionally normal activity for this variant in oncogene {gene}."
             ),
             status="applied",
             source="clinmave",
@@ -196,7 +196,7 @@ def build_functional_evidence(
             score=-4,
             evidenceCode="SBS2",
             evidenceStatement=(
-                "SBS2: ClinMAVE shows functionally normal activity for this "
+                "ClinMAVE shows functionally normal activity for this "
                 f"variant in tumor suppressor gene {gene}."
             ),
             status="applied",

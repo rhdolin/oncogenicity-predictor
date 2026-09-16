@@ -9,6 +9,8 @@ from app.services.annotation import variant_annotator
 from app.services.evidence import functional
 from app.services.evidence import gene_roles
 from app.services.evidence import hotspots
+from app.services.evidence import om1
+from app.services.evidence import op2
 from app.services.evidence import predictive
 from app.services.normalization import variant_normalizer
 
@@ -154,6 +156,18 @@ def _component_by_code(body: dict, code: str) -> dict:
     )
 
 
+def _write_op2_rules_csv(tmp_path, contents: str):
+    path = tmp_path / "op2_rules.csv"
+    path.write_text(contents, encoding="utf-8")
+    return path
+
+
+def _write_om1_domains_csv(tmp_path, contents: str):
+    path = tmp_path / "om1_clingen_domains_seed.csv"
+    path.write_text(contents, encoding="utf-8")
+    return path
+
+
 @pytest.fixture(autouse=True)
 def stub_clingen_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_fetch_allele_registry_record(submitted_variant: str) -> dict:
@@ -174,6 +188,9 @@ def stub_clingen_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(predictive, "search_clinvar_variation_ids", lambda query, retmax=100: [])
     monkeypatch.setattr(predictive, "fetch_clinvar_summaries", lambda variation_ids: {})
     functional._GENE_INDEX_CACHE.clear()
+    om1._load_om1_domain_rows.cache_clear()
+    om1._get_gene_domain_rows.cache_clear()
+    op2._load_op2_rules.cache_clear()
     gene_roles.load_gene_roles.cache_clear()
 
 
@@ -247,6 +264,12 @@ def test_predict_single_returns_observation() -> None:
     )
     assert "dataAbsentReason" not in predictive
 
+    om1_component = _component_by_code(body, "om1-evidence")
+    assert om1_component["dataAbsentReason"]["coding"][0]["code"] == "unsupported"
+
+    op2_component = _component_by_code(body, "op2-evidence")
+    assert op2_component["dataAbsentReason"]["coding"][0]["code"] == "unsupported"
+
     functional = _component_by_code(body, "functional-evidence")
     assert functional["dataAbsentReason"]["coding"][0]["code"] == "unsupported"
 
@@ -288,6 +311,502 @@ def test_summarize_evidence_returns_raw_summary() -> None:
     assert body["oncogenicityEvidence"]["hotspots"]["matchedData"]["gene"] == "FLT3"
     assert body["oncogenicityEvidence"]["predictive"]["evidenceCode"] is None
     assert body["oncogenicityEvidence"]["predictive"]["matchedData"]["proteinChangeOneLetter"] == "F691L"
+    assert body["oncogenicityEvidence"]["om1"]["status"] == "not_available"
+    assert body["oncogenicityEvidence"]["om1"]["dataAbsentReason"] == "unsupported"
+    assert body["oncogenicityEvidence"]["op2"]["status"] == "not_available"
+    assert body["oncogenicityEvidence"]["op2"]["dataAbsentReason"] == "unsupported"
+
+
+def test_om1_braf_variant_in_curated_domain_applies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    domains_path = _write_om1_domains_csv(
+        tmp_path,
+        "geneSymbol,maneTranscript,maneProtein,domainName,startResidue,endResidue,excludedResidues,rowStatus,source,sourceVersion,notes\n"
+        "BRAF,NM_004333.6,NP_004324.2,CR3 activation segment,594,627,,ready,ClinGen CSPEC,2.3,Curated row\n",
+    )
+    monkeypatch.setattr(om1, "OM1_DOMAINS_PATH", domains_path)
+    om1._load_om1_domain_rows.cache_clear()
+    om1._get_gene_domain_rows.cache_clear()
+
+    braf_record = {
+        **CLINGEN_SAMPLE_RECORD,
+        "transcriptAlleles": [
+            {
+                "geneSymbol": "BRAF",
+                "geneNCBI_id": 673,
+                "hgvs": ["NM_004333.6:c.1799T>A"],
+                "genomeAlignments": [
+                    {
+                        "referenceGenome": "GRCh37",
+                        "chromosome": "7",
+                        "start": 140453135,
+                        "end": 140453135,
+                    }
+                ],
+                "proteinEffect": {
+                    "hgvs": "NP_004324.2:p.Val600Glu",
+                    "hgvsWellDefined": "NP_004324.2:p.Val600Glu",
+                },
+                "MANE": {
+                    "maneStatus": "MANE Select",
+                    "nucleotide": {
+                        "RefSeq": {
+                            "hgvs": "NM_004333.6:c.1799T>A",
+                        }
+                    },
+                    "protein": {
+                        "RefSeq": {
+                            "hgvs": "NP_004324.2:p.Val600Glu",
+                        }
+                    },
+                },
+            }
+        ],
+    }
+    braf_vep_record = {
+        **VEP_SAMPLE_RECORD,
+        "input": "NC_000007.14:g.140753336T>A",
+        "most_severe_consequence": "missense_variant",
+        "transcript_consequences": [
+            {
+                **VEP_SAMPLE_RECORD["transcript_consequences"][0],
+                "transcript_id": "NM_004333.6",
+                "hgvsc": "NM_004333.6:c.1799T>A",
+                "hgvsp": "NP_004324.2:p.Val600Glu",
+                "gene_symbol": "BRAF",
+                "protein_start": 600,
+                "protein_end": 600,
+                "amino_acids": "V/E",
+                "mane_select": "ENST00000288602.11",
+                "mane": ["MANE_Select"],
+            }
+        ],
+        "colocated_variants": [],
+    }
+
+    monkeypatch.setattr(
+        variant_normalizer,
+        "fetch_allele_registry_record",
+        lambda submitted_variant: braf_record,
+    )
+    monkeypatch.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: braf_vep_record,
+    )
+
+    response = client.get(
+        "/summarizeEvidence",
+        params={"variant": "NM_004333.6:c.1799T>A"},
+    )
+
+    assert response.status_code == 200
+    om1_evidence = response.json()["oncogenicityEvidence"]["om1"]
+    assert om1_evidence["status"] == "applied"
+    assert om1_evidence["score"] == 2
+    assert om1_evidence["evidenceCode"] == "OM1"
+    assert om1_evidence["evidenceStatement"] == (
+        "Located in a critical and well-established functional domain defined in the curated local ClinGen domain table."
+    )
+    assert om1_evidence["matchedData"]["matchedDomain"]["domainName"] == "CR3 activation segment"
+
+
+def test_om1_braf_variant_outside_curated_domain_does_not_apply(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    domains_path = _write_om1_domains_csv(
+        tmp_path,
+        "geneSymbol,maneTranscript,maneProtein,domainName,startResidue,endResidue,excludedResidues,rowStatus,source,sourceVersion,notes\n"
+        "BRAF,NM_004333.6,NP_004324.2,CR3 activation segment,594,627,,ready,ClinGen CSPEC,2.3,Curated row\n",
+    )
+    monkeypatch.setattr(om1, "OM1_DOMAINS_PATH", domains_path)
+    om1._load_om1_domain_rows.cache_clear()
+    om1._get_gene_domain_rows.cache_clear()
+
+    braf_record = {
+        **CLINGEN_SAMPLE_RECORD,
+        "transcriptAlleles": [
+            {
+                "geneSymbol": "BRAF",
+                "geneNCBI_id": 673,
+                "hgvs": ["NM_004333.6:c.1349T>A"],
+                "genomeAlignments": [
+                    {
+                        "referenceGenome": "GRCh37",
+                        "chromosome": "7",
+                        "start": 140453585,
+                        "end": 140453585,
+                    }
+                ],
+                "proteinEffect": {
+                    "hgvs": "NP_004324.2:p.Val450Glu",
+                    "hgvsWellDefined": "NP_004324.2:p.Val450Glu",
+                },
+                "MANE": {
+                    "maneStatus": "MANE Select",
+                    "nucleotide": {
+                        "RefSeq": {
+                            "hgvs": "NM_004333.6:c.1349T>A",
+                        }
+                    },
+                    "protein": {
+                        "RefSeq": {
+                            "hgvs": "NP_004324.2:p.Val450Glu",
+                        }
+                    },
+                },
+            }
+        ],
+    }
+    braf_vep_record = {
+        **VEP_SAMPLE_RECORD,
+        "input": "NC_000007.14:g.140752886T>A",
+        "most_severe_consequence": "missense_variant",
+        "transcript_consequences": [
+            {
+                **VEP_SAMPLE_RECORD["transcript_consequences"][0],
+                "transcript_id": "NM_004333.6",
+                "hgvsc": "NM_004333.6:c.1349T>A",
+                "hgvsp": "NP_004324.2:p.Val450Glu",
+                "gene_symbol": "BRAF",
+                "protein_start": 450,
+                "protein_end": 450,
+                "amino_acids": "V/E",
+                "mane_select": "ENST00000288602.11",
+                "mane": ["MANE_Select"],
+            }
+        ],
+        "colocated_variants": [],
+    }
+
+    monkeypatch.setattr(
+        variant_normalizer,
+        "fetch_allele_registry_record",
+        lambda submitted_variant: braf_record,
+    )
+    monkeypatch.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: braf_vep_record,
+    )
+
+    response = client.get(
+        "/summarizeEvidence",
+        params={"variant": "NM_004333.6:c.1349T>A"},
+    )
+
+    assert response.status_code == 200
+    om1_evidence = response.json()["oncogenicityEvidence"]["om1"]
+    assert om1_evidence["status"] == "applied"
+    assert om1_evidence["score"] == 0
+    assert om1_evidence["evidenceCode"] is None
+
+
+def test_op2_braf_variant_restricted_match_applies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    rules_path = _write_op2_rules_csv(
+        tmp_path,
+        "tumorType,geneSymbol,maneProteinHgvs\n"
+        "Hairy Cell Leukemia,BRAF,p.V600E\n",
+    )
+    monkeypatch.setattr(op2, "OP2_RULES_PATH", rules_path)
+    op2._load_op2_rules.cache_clear()
+
+    braf_record = {
+        **CLINGEN_SAMPLE_RECORD,
+        "transcriptAlleles": [
+            {
+                "geneSymbol": "BRAF",
+                "geneNCBI_id": 673,
+                "hgvs": ["NM_004333.6:c.1799T>A"],
+                "genomeAlignments": [
+                    {
+                        "referenceGenome": "GRCh37",
+                        "chromosome": "7",
+                        "start": 140453135,
+                        "end": 140453135,
+                    }
+                ],
+                "proteinEffect": {
+                    "hgvs": "NP_004324.2:p.Val600Glu",
+                    "hgvsWellDefined": "NP_004324.2:p.Val600Glu",
+                },
+                "MANE": {
+                    "maneStatus": "MANE Select",
+                    "nucleotide": {
+                        "RefSeq": {
+                            "hgvs": "NM_004333.6:c.1799T>A",
+                        }
+                    },
+                    "protein": {
+                        "RefSeq": {
+                            "hgvs": "NP_004324.2:p.Val600Glu",
+                        }
+                    },
+                },
+            }
+        ],
+    }
+    braf_vep_record = {
+        **VEP_SAMPLE_RECORD,
+        "input": "NC_000007.14:g.140753336T>A",
+        "most_severe_consequence": "missense_variant",
+        "transcript_consequences": [
+            {
+                **VEP_SAMPLE_RECORD["transcript_consequences"][0],
+                "transcript_id": "NM_004333.6",
+                "hgvsc": "NM_004333.6:c.1799T>A",
+                "hgvsp": "NP_004324.2:p.Val600Glu",
+                "gene_symbol": "BRAF",
+                "protein_start": 600,
+                "protein_end": 600,
+                "amino_acids": "V/E",
+                "mane_select": "ENST00000288602.11",
+                "mane": ["MANE_Select"],
+            }
+        ],
+        "colocated_variants": [],
+    }
+
+    monkeypatch.setattr(
+        variant_normalizer,
+        "fetch_allele_registry_record",
+        lambda submitted_variant: braf_record,
+    )
+    monkeypatch.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: braf_vep_record,
+    )
+
+    response = client.get(
+        "/summarizeEvidence",
+        params={
+            "variant": "NM_004333.6:c.1799T>A",
+            "tumorType": "Hairy Cell Leukemia",
+        },
+    )
+
+    assert response.status_code == 200
+    op2_evidence = response.json()["oncogenicityEvidence"]["op2"]
+    assert op2_evidence["status"] == "applied"
+    assert op2_evidence["score"] == 1
+    assert op2_evidence["evidenceCode"] == "OP2"
+    assert op2_evidence["evidenceStatement"] == (
+        "Somatic variant in a gene associated with a malignancy with a curated single genetic etiology context."
+    )
+    assert op2_evidence["matchedData"]["maneProteinHgvs"] == "p.V600E"
+    assert op2_evidence["matchedData"]["matchedRule"]["tumorType"] == "Hairy Cell Leukemia"
+
+
+def test_op2_variant_restricted_row_requires_mane_protein_annotation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    rules_path = _write_op2_rules_csv(
+        tmp_path,
+        "tumorType,geneSymbol,maneProteinHgvs\n"
+        "Hairy Cell Leukemia,BRAF,p.V600E\n",
+    )
+    monkeypatch.setattr(op2, "OP2_RULES_PATH", rules_path)
+    op2._load_op2_rules.cache_clear()
+
+    braf_record = {
+        **CLINGEN_SAMPLE_RECORD,
+        "transcriptAlleles": [
+            {
+                "geneSymbol": "BRAF",
+                "geneNCBI_id": 673,
+                "hgvs": ["NM_004333.6:c.1799T>A"],
+                "genomeAlignments": [
+                    {
+                        "referenceGenome": "GRCh37",
+                        "chromosome": "7",
+                        "start": 140453135,
+                        "end": 140453135,
+                    }
+                ],
+                "proteinEffect": {
+                    "hgvs": "NP_004324.2:p.Val600Glu",
+                    "hgvsWellDefined": "NP_004324.2:p.Val600Glu",
+                },
+                "MANE": {
+                    "maneStatus": "MANE Select",
+                    "nucleotide": {
+                        "RefSeq": {
+                            "hgvs": "NM_004333.6:c.1799T>A",
+                        }
+                    },
+                    "protein": {
+                        "RefSeq": {
+                            "hgvs": "NP_004324.2:p.Val600Glu",
+                        }
+                    },
+                },
+            }
+        ],
+    }
+    braf_vep_record = {
+        **VEP_SAMPLE_RECORD,
+        "input": "NC_000007.14:g.140753336T>A",
+        "most_severe_consequence": "missense_variant",
+        "transcript_consequences": [
+            {
+                **VEP_SAMPLE_RECORD["transcript_consequences"][0],
+                "transcript_id": "NM_004333.6",
+                "hgvsc": "NM_004333.6:c.1799T>A",
+                "hgvsp": "NP_004324.2:p.Val600Glu",
+                "gene_symbol": "BRAF",
+                "protein_start": 600,
+                "protein_end": 600,
+                "amino_acids": "V/E",
+                "mane_select": None,
+                "mane": None,
+            }
+        ],
+        "colocated_variants": [],
+    }
+
+    monkeypatch.setattr(
+        variant_normalizer,
+        "fetch_allele_registry_record",
+        lambda submitted_variant: braf_record,
+    )
+    monkeypatch.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: braf_vep_record,
+    )
+
+    response = client.get(
+        "/summarizeEvidence",
+        params={
+            "variant": "NM_004333.6:c.1799T>A",
+            "tumorType": "Hairy Cell Leukemia",
+        },
+    )
+
+    assert response.status_code == 200
+    op2_evidence = response.json()["oncogenicityEvidence"]["op2"]
+    assert op2_evidence["status"] == "not_available"
+    assert op2_evidence["dataAbsentReason"] == "unsupported"
+    assert op2_evidence["matchedData"]["specificRuleProteinHgvs"] == ["p.V600E"]
+
+
+def test_op2_rb1_broad_row_applies_to_any_rb1_variant(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    rules_path = _write_op2_rules_csv(
+        tmp_path,
+        "tumorType,geneSymbol,maneProteinHgvs\n"
+        "Retinoblastoma,RB1,\n",
+    )
+    monkeypatch.setattr(op2, "OP2_RULES_PATH", rules_path)
+    op2._load_op2_rules.cache_clear()
+
+    rb1_record = {
+        **CLINGEN_SAMPLE_RECORD,
+        "genomicAlleles": [
+            {
+                "chromosome": "13",
+                "coordinates": [
+                    {
+                        "allele": "T",
+                        "end": 48376639,
+                        "referenceAllele": "C",
+                        "start": 48376638,
+                    }
+                ],
+                "hgvs": ["NC_000013.11:g.48376639C>T"],
+                "referenceGenome": "GRCh38",
+            }
+        ],
+        "transcriptAlleles": [
+            {
+                "geneSymbol": "RB1",
+                "geneNCBI_id": 5925,
+                "hgvs": ["NM_000321.3:c.763C>T"],
+                "genomeAlignments": [
+                    {
+                        "referenceGenome": "GRCh37",
+                        "chromosome": "13",
+                        "start": 48938230,
+                        "end": 48938231,
+                    }
+                ],
+                "proteinEffect": {
+                    "hgvs": "NP_000312.2:p.Arg255Ter",
+                    "hgvsWellDefined": "NP_000312.2:p.Arg255Ter",
+                },
+                "MANE": {
+                    "maneStatus": "MANE Select",
+                    "nucleotide": {
+                        "RefSeq": {
+                            "hgvs": "NM_000321.3:c.763C>T",
+                        }
+                    },
+                    "protein": {
+                        "RefSeq": {
+                            "hgvs": "NP_000312.2:p.Arg255Ter",
+                        }
+                    },
+                },
+            }
+        ],
+    }
+    rb1_vep_record = {
+        **VEP_SAMPLE_RECORD,
+        "input": "NC_000013.11:g.48376639C>T",
+        "most_severe_consequence": "stop_gained",
+        "transcript_consequences": [
+            {
+                **VEP_SAMPLE_RECORD["transcript_consequences"][0],
+                "transcript_id": "NM_000321.3",
+                "hgvsc": "NM_000321.3:c.763C>T",
+                "hgvsp": "NP_000312.2:p.Arg255Ter",
+                "gene_symbol": "RB1",
+                "protein_start": 255,
+                "protein_end": 255,
+                "amino_acids": "R/*",
+                "mane_select": "ENST00000267163.8",
+                "mane": ["MANE_Select"],
+                "consequence_terms": ["stop_gained"],
+            }
+        ],
+        "colocated_variants": [],
+    }
+
+    monkeypatch.setattr(
+        variant_normalizer,
+        "fetch_allele_registry_record",
+        lambda submitted_variant: rb1_record,
+    )
+    monkeypatch.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: rb1_vep_record,
+    )
+
+    response = client.get(
+        "/summarizeEvidence",
+        params={
+            "variant": "NM_000321.3:c.763C>T",
+            "tumorType": "Retinoblastoma",
+        },
+    )
+
+    assert response.status_code == 200
+    op2_evidence = response.json()["oncogenicityEvidence"]["op2"]
+    assert op2_evidence["status"] == "applied"
+    assert op2_evidence["score"] == 1
+    assert op2_evidence["evidenceCode"] == "OP2"
+    assert op2_evidence["matchedData"]["matchedRule"]["geneSymbol"] == "RB1"
 
 
 def test_functional_gene_not_in_retained_panel_is_not_available() -> None:
@@ -415,6 +934,9 @@ def test_functional_atm_match_applies_os2(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert functional_evidence["status"] == "applied"
     assert functional_evidence["score"] == 4
     assert functional_evidence["evidenceCode"] == "OS2"
+    assert functional_evidence["evidenceStatement"] == (
+        "ClinMAVE shows loss-of-function for this variant in tumor suppressor gene ATM."
+    )
     assert functional_evidence["matchedData"]["maneSelectB38"] == "NM_000051.4:c.283C>T"
 
 
@@ -778,6 +1300,7 @@ def test_predictive_gata3_uses_tumor_type_for_ovs1(
     assert predictive_tsg["status"] == "applied"
     assert predictive_tsg["score"] == 8
     assert predictive_tsg["evidenceCode"] == "OVS1"
+    assert predictive_tsg["evidenceStatement"] == "start_lost variant in known tumor suppressor gene GATA3."
     assert predictive_tsg["matchedData"]["resolvedGeneRole"] == "tsg"
 
     predictive_oncogene = response_oncogene.json()["oncogenicityEvidence"]["predictive"]
@@ -995,6 +1518,9 @@ def test_predictive_os1_matches_exact_protein_alias(monkeypatch: pytest.MonkeyPa
     predictive_evidence = body["oncogenicityEvidence"]["predictive"]
     assert predictive_evidence["score"] == 4
     assert predictive_evidence["evidenceCode"] == "OS1"
+    assert predictive_evidence["evidenceStatement"] == (
+        "Same amino acid change as a previously established somatic oncogenic ClinVar variant."
+    )
     assert predictive_evidence["matchedData"]["matchedVariationId"] == "40364"
     assert predictive_evidence["matchedData"]["proteinChangeOneLetter"] == "G464V"
 
@@ -1070,6 +1596,9 @@ def test_predictive_os1_rejects_same_residue_different_protein_change(
     predictive_evidence = body["oncogenicityEvidence"]["predictive"]
     assert predictive_evidence["score"] == 2
     assert predictive_evidence["evidenceCode"] == "OM4"
+    assert predictive_evidence["evidenceStatement"] == (
+        "Missense variant at an amino acid residue where a different somatic oncogenic missense variant is established in ClinVar."
+    )
 
 
 def test_predictive_om4_matches_different_same_residue_oncogenic_variant(
@@ -1245,6 +1774,7 @@ def test_predictive_om2_applies_for_inframe_deletion_in_oncogene() -> None:
     predictive_evidence = body["oncogenicityEvidence"]["predictive"]
     assert predictive_evidence["score"] == 2
     assert predictive_evidence["evidenceCode"] == "OM2"
+    assert predictive_evidence["evidenceStatement"] == "inframe_deletion variant in known cancer gene FLT3."
     assert predictive_evidence["matchedData"]["geneRole"] == "oncogene"
 
 
@@ -1283,6 +1813,9 @@ def test_predictive_sbp2_applies_for_low_phylo_p_synonymous_variant() -> None:
     predictive_evidence = body["oncogenicityEvidence"]["predictive"]
     assert predictive_evidence["score"] == -1
     assert predictive_evidence["evidenceCode"] == "SBP2"
+    assert predictive_evidence["evidenceStatement"] == (
+        "Synonymous variant with low conservation scores in FLT3."
+    )
     assert predictive_evidence["matchedData"]["phyloP100wayVertebrate"] == 1.2
 
 

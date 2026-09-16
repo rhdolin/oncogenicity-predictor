@@ -434,6 +434,8 @@ def _parse_consequence_event_bounds(
 
 
 def _parse_protein_event_bounds(event: str) -> tuple[int | None, int | None]:
+    # OM1 uses a parallel local parser for the same localized event shapes.
+    # If these rules change, review app/services/evidence/om1.py as well.
     match = re.match(
         r"^[A-Z*](\d+)(?:_[A-Z*](\d+))?(?:delins[A-Z*]+|ins[A-Z*]+|del|dup)$",
         event,

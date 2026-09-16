@@ -2,29 +2,49 @@
 
 ## Purpose
 
-This document is the working specification for the oncogenicity evidence pipelines, the final score aggregation layer, and the current single-Observation prediction rendering.
+This document is the working specification for the oncogenicity evidence pipelines, the current overall score aggregation layer, and the current single-Observation prediction rendering.
 
 - The architecture document describes where evidence and scoring fit in the system.
-- This document defines the rule logic and response intent for each pipeline.
-- For now, only the population pipeline is described in detail.
+- This document defines the rule logic, data dependencies, and response semantics for each evidence pipeline.
 - The final client-facing prediction payload should not include `AnnotatedVariant` or `NormalizedVariant`.
+
+## Current State Summary
+
+The repository currently implements these evidence pipelines:
+
+- population
+- computational
+- hotspots
+- predictive
+- om1
+- op2
+- functional
+
+The repository does not yet implement:
+
+- final score-to-classification mapping
+
+Current overall scoring simply sums the implemented pipeline scores. The service returns one FHIR Observation-style result per queried variant.
 
 ## Scope
 
-- Shared evidence result shape
-- Population evidence rules
-- Computational rules plus implemented hotspot, predictive, and functional pipelines
-- Placeholder for final score aggregation and classification mapping
+- shared evidence result shape and semantics
+- rule order and availability behavior for each implemented pipeline
+- current data sources and matching strategies
+- current implemented pipelines plus remaining planned v1 additions
+- current overall score aggregation and prediction rendering
 
 ## Shared Evidence Result Shape
 
-Each pipeline is expected to produce a structured result shaped roughly like:
+Each pipeline emits one `EvidenceResult`.
+
+Current model shape:
 
 ```json
 {
   "score": 1,
   "evidenceCode": "OP4",
-  "evidenceStatement": "Present at low frequency in gnomAD (≤1%; observed 0.20%).",
+  "evidenceStatement": "Present at low frequency in gnomAD (<=1%; observed 0.20%).",
   "status": "applied",
   "source": "vep",
   "matchedData": {
@@ -32,19 +52,27 @@ Each pipeline is expected to produce a structured result shaped roughly like:
     "maxSubpopulationLabel": "gnomade_nfe",
     "maxOverallAf": 0.0015,
     "maxOverallLabel": "gnomadg"
-  }
+  },
+  "dataAbsentReason": null
 }
 ```
 
-Working meanings for the additional fields:
+Current field meanings:
 
-- `status`: whether the rule was applied, evaluated but not triggered, not available, or failed
-- `source`: the immediate source used by the pipeline, such as `vep`, `clinvar`, `cancerhotspots`, or `mavedb`
-- `matchedData`: the structured values that drove the result so the rule is auditable without parsing free text
+- `score`: signed integer contribution from the pipeline
+- `evidenceCode`: the applied evidence code when one exists, otherwise `null`
+- `evidenceStatement`: human-readable explanation of the outcome
+- `status`: currently constrained to `applied` or `not_available`
+- `source`: immediate source or pipeline label used by the rule
+- `matchedData`: structured audit trail for the decision when available
+- `dataAbsentReason`: reason token used when the pipeline is not available
 
-The exact enum values are now partially locked for the current implementation: `applied` and `not_available` are both in use, and the distinction between rule outcome and pipeline availability is preserved.
+Current status semantics are intentionally narrow:
 
-Each evidence pipeline emits at most one result. When a pipeline contains multiple criteria, they are evaluated in a defined priority order and the first matching criterion wins. If no criterion matches, the pipeline still returns a single `applied` result with score `0` rather than emitting multiple partial results.
+- `applied` means the pipeline had enough information to evaluate its current rule set, including score `0` outcomes where no rule fired or where matching data supported a neutral outcome
+- `not_available` means the pipeline could not be defensibly evaluated because required annotation, context, or local source data was missing, unreadable, or unsupported
+
+Each evidence pipeline emits at most one result. When a pipeline contains multiple criteria, they are evaluated in a defined priority order and the first matching criterion wins. If no criterion matches but the pipeline had enough information to evaluate its current rule set, the pipeline returns a single `applied` result with score `0`.
 
 ## Population Pipeline
 
@@ -54,33 +82,25 @@ The population pipeline interprets gnomAD allele-frequency data and emits one ev
 
 ### Current Upstream Inputs
 
-The current predictor implementation already collapses VEP population output into:
+The current predictor implementation collapses VEP population output into:
 
 - `basicAnnotation.population.maxSubpopulationAf`
 - `basicAnnotation.population.maxSubpopulationLabel`
 - `basicAnnotation.population.maxOverallAf`
 - `basicAnnotation.population.maxOverallLabel`
 
-These values are derived from VEP co-located variant frequencies sourced from gnomAD.
+These values are derived from Ensembl REST VEP `colocated_variants[].frequencies` fields.
 
-More specifically, the current implementation does not query a standalone gnomAD release directly. It calls the current-assembly Ensembl REST VEP endpoint at `https://rest.ensembl.org/vep/human/hgvs`, which is the GRCh38 service in this repository, and it uses the gnomAD frequency fields that VEP returns inside `colocated_variants[].frequencies`. In v1 that means:
+More specifically, the repository does not query a standalone gnomAD release directly. It calls the current-assembly Ensembl REST VEP endpoint and uses the gnomAD frequency fields that VEP returns. In v1 that means:
 
 - gnomAD exomes overall and subpopulation fields: `gnomade` and `gnomade_*`
 - gnomAD genomes overall and subpopulation fields: `gnomadg` and `gnomadg_*`
 
-The current code takes the maximum relevant value across both of those VEP-exposed sources. It does not currently use a separate gnomAD structural-variant dataset.
+The exact underlying gnomAD release is therefore controlled by the Ensembl VEP service release rather than by a separate repository-level configuration.
 
-As of the current Ensembl release documentation checked for this project, the human VEP data tables list `gnomAD exomes` as `v4.1` and `gnomAD genomes` as `v4.1`. That same published table is shown for both the main GRCh38 Ensembl release site and the GRCh37 Ensembl release site, so this repository should not document a simple `GRCh37 -> gnomAD v2.1.1` rule without stronger evidence.
+### Current Decision Basis
 
-The exact underlying gnomAD release is therefore still controlled by the Ensembl VEP service release we are calling, not by a separate configuration in this repository. This repository does not currently pin or configure a standalone gnomAD version independently of VEP.
-
-For v1, the population pipeline should rely only on these collapsed summary fields rather than carrying forward the full raw allele-frequency map.
-
-### Current Intended Rule Basis
-
-The starting point is the existing deterministic population-frequency logic from the prior prototype implementation.
-
-That logic:
+The current logic:
 
 1. Prefers the ALT allele bucket from VEP `allele_string` and `frequencies`.
 2. Computes the maximum observed subpopulation allele frequency across `gnomade_*` and `gnomadg_*` population fields.
@@ -89,158 +109,33 @@ That logic:
 5. Falls back to the maximum overall allele frequency if no subpopulation value is available.
 6. Falls back to `0.0` if VEP annotation succeeds but no usable population frequency is available.
 
-In other words, the scoring rule is driven by a single effective population allele frequency chosen in this order:
+The scoring rule is driven by one effective allele frequency chosen in this order:
 
 1. `maxSubpopulationAf`
 2. `maxOverallAf`
 3. `0.0`
 
-If VEP returns successfully but population-frequency fields are absent, the effective population allele frequency is treated as `0.0`.
+### Current Rule Mapping
 
-### Initial Rule Mapping
+- effective AF `> 0.05` -> `SBVS1`, score `-8`
+- else effective AF `> 0.01` -> `SBS1`, score `-4`
+- else -> `OP4`, score `1`
 
-The current intended rule mapping is:
-
-- If effective population AF is greater than `0.05`, return `SBVS1` with score `-8`
-- Else if effective population AF is greater than `0.01`, return `SBS1` with score `-4`
-- Else return `OP4` with score `1`
-
-This means the current draft behavior treats both of these as `OP4`:
+This means the current v1 policy treats both of these as `OP4`:
 
 - complete absence from controls
 - low frequency less than or equal to `1%`
 
-This policy is now locked for v1.
+### Current Availability Semantics
 
-### Draft Decision Logic
-
-Pseudo-logic for the population pipeline:
-
-```text
-effective_af = maxSubpopulationAf if present
-    else maxOverallAf if present
-    else 0.0
-
-if effective_af > 0.05:
-    score = -8
-    evidenceCode = "SBVS1"
-elif effective_af > 0.01:
-    score = -4
-    evidenceCode = "SBS1"
-elif effective_af == 0.0:
-    score = 1
-    evidenceCode = "OP4"
-else:
-    score = 1
-    evidenceCode = "OP4"
-```
-
-### Draft Evidence Statements
-
-For `SBVS1`:
-
-```json
-{
-  "score": -8,
-  "evidenceCode": "SBVS1",
-  "evidenceStatement": "Minor allele frequency is >5% in gnomAD (5.40%).",
-  "status": "applied",
-  "source": "vep",
-  "matchedData": {
-    "effectiveAf": 0.054,
-    "effectiveAfSource": "maxSubpopulationAf",
-    "maxSubpopulationAf": 0.054,
-    "maxSubpopulationLabel": "gnomade_nfe",
-    "maxOverallAf": 0.041,
-    "maxOverallLabel": "gnomadg"
-  }
-}
-```
-
-For `SBS1`:
-
-```json
-{
-  "score": -4,
-  "evidenceCode": "SBS1",
-  "evidenceStatement": "Minor allele frequency is >1% in gnomAD (1.40%).",
-  "status": "applied",
-  "source": "vep",
-  "matchedData": {
-    "effectiveAf": 0.014,
-    "effectiveAfSource": "maxSubpopulationAf",
-    "maxSubpopulationAf": 0.014,
-    "maxSubpopulationLabel": "gnomadg_amr",
-    "maxOverallAf": 0.009,
-    "maxOverallLabel": "gnomade"
-  }
-}
-```
-
-For `OP4` when absent from controls:
-
-```json
-{
-  "score": 1,
-  "evidenceCode": "OP4",
-  "evidenceStatement": "Absent from gnomAD controls.",
-  "status": "applied",
-  "source": "vep",
-  "matchedData": {
-    "effectiveAf": 0.0,
-    "effectiveAfSource": "none",
-    "maxSubpopulationAf": null,
-    "maxSubpopulationLabel": null,
-    "maxOverallAf": null,
-    "maxOverallLabel": null
-  }
-}
-```
-
-For `OP4` when present at low frequency:
-
-```json
-{
-  "score": 1,
-  "evidenceCode": "OP4",
-  "evidenceStatement": "Present at low frequency in gnomAD (≤1%; observed 0.20%).",
-  "status": "applied",
-  "source": "vep",
-  "matchedData": {
-    "effectiveAf": 0.002,
-    "effectiveAfSource": "maxSubpopulationAf",
-    "maxSubpopulationAf": 0.002,
-    "maxSubpopulationLabel": "gnomade_nfe",
-    "maxOverallAf": 0.0015,
-    "maxOverallLabel": "gnomadg"
-  }
-}
-```
-
-### Handling Missing Annotation Data
-
-If VEP annotation failed and population data is unavailable, the population pipeline should not pretend the rule was evaluated.
-
-Current recommendation:
-
-```json
-{
-  "score": 0,
-  "evidenceCode": null,
-  "evidenceStatement": "Population evidence could not be evaluated because annotation data was unavailable.",
-  "status": "not_available",
-  "source": "vep",
-  "matchedData": null
-}
-```
-
-This behavior is specifically for VEP annotation failure or lack of any VEP result. If VEP returns successfully but no population frequency data is present, the population pipeline should treat the effective allele frequency as `0.0` rather than `not_available`.
+- `not_available` when annotation failed and population data is unavailable
+- `applied` when annotation succeeded, even if no population frequency fields were present, because that case is interpreted as effective AF `0.0`
 
 ## Computational Pipeline
 
 ### Purpose
 
-The current computational pipeline applies a narrow rule set using Ensembl VEP-exposed `CADD` and `FATHMM-XF` annotations. Positive support from high `CADD` can be applied across consequence classes, while benign support remains restricted to missense variants.
+The computational pipeline applies a narrow rule set using Ensembl VEP-exposed `CADD` and `FATHMM-XF` annotations.
 
 ### Current Upstream Inputs
 
@@ -252,11 +147,384 @@ The current annotation step populates:
 - `computationalAnnotation.fathmmXfCoding.prediction`
 - `computationalAnnotation.fathmmXfCoding.score`
 - `computationalAnnotation.fathmmXfCoding.rankscore`
+- `basicAnnotation.mostSevereConsequence`
 
-Those values currently come from Ensembl REST VEP with:
+These values currently come from Ensembl REST VEP with:
 
 - `CADD=true`
 - `dbNSFP=ALL`
+
+The implementation extracts the needed `FATHMM-XF` fields from the returned `dbNSFP` payload because explicit field requests proved unreliable for this repository.
+
+### Current Rule Order
+
+1. `OP1`
+2. `SBP1`
+3. else score `0` with `applied`
+
+### Current Rule Mapping
+
+- `OP1` when `CADD PHRED >= 15`, including non-missense variants
+- `SBP1` when all of the following are true:
+- `mostSevereConsequence == "missense_variant"`
+- `CADD PHRED < 15`
+- `FATHMM-XF` prediction is benign or neutral
+
+Low `CADD` alone does not trigger `SBP1`. Non-missense variants are not eligible for the current benign computational rule.
+
+### Current Availability Semantics
+
+- `not_available` when annotation failed
+- `not_available` when `CADD` is unavailable
+- `applied` score `0` when computational data was sufficient to evaluate the implemented rule set but no code fired
+
+## Hotspots Pipeline
+
+### Purpose
+
+The hotspots pipeline evaluates the bundled Cancer Hotspots workbook against transcript-level protein consequences.
+
+### Current Data Source
+
+- local workbook: `data/hotspots_v2.xlsx`
+- source provenance: Cancer Hotspots
+
+### Current Data Access Strategy
+
+- the workbook is parsed into an in-memory index on first use
+- the service does not reopen the workbook for every variant
+- unreadable or missing workbook data is treated as pipeline unavailability rather than as a score `0` evaluation
+
+### Current Match Policy
+
+- matching is gene-centric because the workbook is not transcript-indexed
+- transcript consequences are evaluated in order, and the first defensible hotspot match wins
+- SNVs require exact match on gene, amino-acid position, reference amino acid, and alternate amino acid
+- indels are supported only when the transcript consequence can be compared directly to the workbook's native event representation
+- there is no separate indel normalization layer beyond the current direct event matching
+
+### Current Rule Mapping
+
+- `OS3` when hotspot `mutation_count >= 50` and exact protein-event `variant_count >= 10`, score `4`
+- `OM3` when exact protein-event `variant_count >= 10` but `OS3` does not apply, score `2`
+- `OP3` when exact protein-event `variant_count` is between `1` and `9`, score `1`
+- else score `0`
+
+### Current Availability Semantics
+
+- `not_available` when annotation failed
+- `not_available` when the normalized gene symbol is unavailable
+- `not_available` when the local hotspot workbook is missing or unreadable
+- `applied` score `0` when no transcript consequence yields a defensible hotspot match
+
+## Predictive Pipeline
+
+### Purpose
+
+The predictive pipeline combines deterministic consequence-based logic with ClinVar-backed protein-change matching.
+
+### Current Upstream Inputs
+
+The current implementation depends on:
+
+- `normalizedVariant.geneSymbol`
+- `normalizedVariant.protein.short_name`
+- `normalizedVariant.protein.hgvs_3letter`
+- `basicAnnotation.mostSevereConsequence`
+- `computationalAnnotation.phyloP100wayVertebrate`
+- optional `tumorType`
+- local gene-role metadata in `data/_Dict_Gene.csv`
+- ClinVar E-utilities search and summary lookups
+
+### Current Role Resolution Policy
+
+Most genes resolve directly from `data/_Dict_Gene.csv` as oncogene, tumor suppressor gene, both, or neither.
+
+`GATA3` is currently the main dual-role case. Predictive interpretation uses optional `tumorType` to resolve whether the queried context should behave as oncogene or tumor suppressor gene. If a dual-role gene cannot be resolved for the supplied tumor type, role-dependent predictive rules are treated as unavailable rather than evaluated as neutral.
+
+### Current Rule Order
+
+1. `OVS1`
+2. `OS1`
+3. `OM2`
+4. `SBP2`
+5. `OM4`
+6. else score `0` with `applied`
+
+### Current Rule Mapping
+
+- `OVS1`, score `8`: null variant in a resolved tumor suppressor gene context
+- `OS1`, score `4`: same amino acid change as a previously established somatic oncogenic ClinVar variant
+- `OM2`, score `2`: in-frame insertion or deletion in a resolved oncogene or tumor suppressor gene context, or `stop_lost` in a resolved tumor suppressor gene context
+- `SBP2`, score `-1`: synonymous variant with `phyloP100wayVertebrate < 2.0`
+- `OM4`, score `2`: missense variant at an amino-acid residue where a different missense variant is established as somatic oncogenic in ClinVar
+
+### Current ClinVar Match Policy
+
+- ClinVar ESearch uses fielded queries built from gene plus protein tokens
+- Entrez `[varnam]` search is not treated as exact matching
+- returned ClinVar summaries are filtered locally against exact protein aliases before `OS1` or `OM4` is applied
+- ClinVar lookup failure is treated as `not_available` for the affected rule path rather than as a neutral score `0`
+
+### Current Availability Semantics
+
+- `not_available` when annotation failed
+- `not_available` when required local fields for a rule path are unavailable, such as missing gene symbol, missing residue token, or missing `phyloP`
+- `not_available` when a dual-role gene requires tumor type but tumor type is missing or unresolved for the current mapping
+- `not_available` when the relevant ClinVar lookup fails
+- `applied` score `0` when the pipeline had enough information to evaluate the current predictive rule set but no rule fired
+
+## Functional Pipeline
+
+### Purpose
+
+The functional pipeline uses locally retained ClinMAVE per-gene CSV exports to map curated functional assay results into `OS2`, `SBS2`, or a neutral score of `0`.
+
+### Current Upstream Inputs
+
+The current implementation depends on:
+
+- `normalizedVariant.geneSymbol`
+- `normalizedVariant.transcript_hgvs.mane_select_b38`
+- optional `tumorType`
+- local ClinMAVE files under `data/clinmave/variants.<GENE>.csv`
+- local gene-role metadata in `data/_Dict_Gene.csv`
+
+ClinMAVE `Identifier` values are normalized from forms like:
+
+- `NM_000051.4(ATM):c.283C>T (p.Gln95Ter)`
+
+to transcript HGVS strings like:
+
+- `NM_000051.4:c.283C>T`
+
+The pipeline then performs exact equality matching against `mane_select_b38`.
+
+### Current Match Policy
+
+- primary and only v1 match key: `normalizedVariant.transcript_hgvs.mane_select_b38`
+- match requires exact string equality after ClinMAVE identifier normalization
+- no fallback to alternate transcript, protein, or genomic matching in v1
+- if the queried gene is not present in the retained ClinMAVE panel, return `not_available`
+- if the gene is present but the variant is not found, return `not_available`
+
+### Current Functional Class Mapping
+
+Observed ClinMAVE functional classes in the retained dataset are:
+
+- `Functionally normal`
+- `Gain-of-function`
+- `Loss-of-function`
+
+Current interpretation:
+
+- `Functionally normal` -> normal
+- `Gain-of-function` -> GOF
+- `Loss-of-function` -> LOF
+
+### Current Gene Role Policy
+
+Most retained genes resolve directly to oncogene or tumor suppressor gene using `data/_Dict_Gene.csv`.
+
+`GATA3` is currently treated as a dual-role gene and requires `tumorType` to resolve role:
+
+- oncogene contexts: `Peripheral T-Cell Lymphoma`, `T-Cell Acute Lymphoblastic Leukemia`, `Hodgkin Lymphoma`, `Neuroblastoma`, `T-Cell Lymphoblastic Lymphoma`
+- tumor suppressor gene contexts: `Breast Cancer`, `Urothelial Carcinoma`, `Bladder Carcinoma`, `Renal Cell Carcinoma`, `Parathyroid Carcinoma`
+- any other tumor type: no functional rule is applied and the result is `not_available`
+
+### Current Rule Mapping
+
+- oncogene + `Gain-of-function` -> `OS2`, score `4`
+- tumor suppressor gene + `Loss-of-function` -> `OS2`, score `4`
+- oncogene + `Functionally normal` -> `SBS2`, score `-4`
+- tumor suppressor gene + `Functionally normal` -> `SBS2`, score `-4`
+- oncogene + `Loss-of-function` -> score `0`, `applied`
+- tumor suppressor gene + `Gain-of-function` -> score `0`, `applied`
+- conflicting ClinMAVE classifications for the same exact matched transcript HGVS -> score `0`, `applied`
+
+### Current Availability Semantics
+
+- `not_available` when annotation failed
+- `not_available` when no gene symbol was resolved
+- `not_available` when no MANE transcript HGVS representation was resolved
+- `not_available` when the gene is not in the retained ClinMAVE panel
+- `not_available` when the gene is supported but the variant is not found
+- `not_available` when tumor-type context is required but missing or unresolved
+- `applied` when a ClinMAVE row is found and evaluated, including score `0` outcomes
+- `applied` when exact-match ClinMAVE rows are found but contain conflicting classifications, in which case the statement explains that no functional rule is applied
+
+### Current Data Access Strategy
+
+- ClinMAVE gene CSVs are loaded lazily, one gene at a time, on first use
+- parsed rows are cached in memory for the life of the process
+- the pipeline does not preload all retained ClinMAVE files at startup
+
+## OM1 Pipeline
+
+### Purpose
+
+The OM1 pipeline evaluates whether a localized protein-altering variant falls within a curated critical and well-established functional domain.
+
+### Current Data Source
+
+- local CSV: `data/om1_clingen_domains_seed.csv`
+- source provenance: ClinGen CSPEC, materialized into a local MANE-anchored working table
+
+### Current Data Access Strategy
+
+- the service loads released OM1-ready rows from the bundled CSV on first use
+- only rows with `rowStatus=ready` participate in runtime evaluation
+- genes represented only by non-ready inventory rows are treated as unavailable, not neutral
+- unreadable or missing local CSV data is treated as pipeline unavailability rather than as score `0`
+
+### Current Match Policy
+
+- matching is gene- and MANE-transcript-specific
+- the pipeline requires a MANE Select transcript consequence from annotation
+- eligible event types are localized protein-altering consequences currently represented as `substitution`, `deletion`, `insertion`, `duplication`, or `delins`
+- substitutions use the resolved protein residue position
+- localized in-frame events use the resolved protein residue span, preferring parsed `p.HGVS` event bounds and falling back to `proteinStart` and `proteinEnd`
+- truncating and other non-localized event types are not eligible for the current OM1 rule and therefore evaluate to score `0` when annotation is otherwise sufficient
+- excluded residues are supported by the row schema and suppress OM1 when the localized event overlaps one of those explicitly excluded positions
+
+### Current Rule Mapping
+
+- `OM1`, score `2`: localized MANE protein event overlaps a curated critical-domain interval in the local ClinGen table
+- else score `0`
+
+### Current Availability Semantics
+
+- `not_available` when annotation failed
+- `not_available` when the normalized gene symbol is unavailable
+- `not_available` when the local OM1 domain table is missing or unreadable
+- `not_available` when the gene has no released `rowStatus=ready` ClinGen domain rows in the local table
+- `not_available` when no MANE Select transcript consequence is available
+- `not_available` when an otherwise eligible localized protein event lacks a resolvable residue position or span
+- `applied` score `0` when annotation and local OM1 data were sufficient but the current rule did not fire
+
+## OP2 Pipeline
+
+`OP2` is now implemented as a small curated tumor-type-aware evidence block.
+
+### Current Rule Basis
+
+The manuscript describes `OP2` as:
+
+- somatic variant in a gene in a malignancy with a single genetic etiology
+
+The current implementation intentionally treats this as a small curated exception table rather than as a broad inferred rule.
+
+### Current Data Shape
+
+The rules table currently lives at `data/op2_rules.csv` with columns:
+
+- `tumorType`
+- `geneSymbol`
+- `maneProteinHgvs`
+
+Current seed rows are intentionally small and representative.
+
+### Current Match Semantics
+
+- `tumorType` is required
+- `geneSymbol` is required
+- `maneProteinHgvs` is optional
+- if `maneProteinHgvs` is populated, the row should match only when the MANE Select transcript consequence has the same normalized one-letter protein HGVS value
+- if `maneProteinHgvs` is blank, the row acts as a broad disease-plus-gene rule
+
+Current seeded examples include:
+
+- variant-restricted OP2 rows for canonical disease-defining protein events such as `FOXL2 p.C134W` and `BRAF p.V600E`
+- a broader disease-plus-gene OP2 row for `RB1` in retinoblastoma
+
+### Current Availability Semantics
+
+- `not_available` when annotation failed
+- `not_available` when `tumorType` is missing because tumor context is the primary entry criterion
+- `not_available` when a variant-restricted OP2 row is relevant but no MANE Select protein consequence is available for matching
+- `not_available` when the local OP2 rules table is missing or unreadable
+- `applied` score `1` with `OP2` when a curated row matches
+- `applied` score `0` when `tumorType` is present but no curated row matches
+
+### Current Matching Notes
+
+- OP2 uses exact equality for `tumorType` and `geneSymbol`
+- variant-restricted rows use exact equality against the MANE Select transcript consequence `proteinHgvs` value in normalized one-letter form, such as `p.V600E`
+- the current broad `RB1` retinoblastoma row does not require an additional mechanism-compatibility gate
+
+## Planned OM1 Pipeline
+
+`OM1` is not yet implemented in this repository.
+
+Current design context:
+
+- a legacy implementation exists in the sibling repository and uses a local critical-domain workbook
+- the current repository does not yet contain that workbook
+- no current v1 implementation or finalized local data asset exists here yet
+
+Until the local data source and exact behavior are ported or redesigned, this repository should treat `OM1` as a planned rule rather than as implemented behavior.
+
+## Current Overall Score Aggregation
+
+Current overall scoring is intentionally minimal. The score is the sum of the currently implemented evidence pipelines:
+
+- population
+- computational
+- hotspots
+- predictive
+- functional
+
+There is no separate weighting or post-processing layer beyond those per-pipeline scores.
+
+There is not yet any contribution from:
+
+- `OM1`
+- final classification logic
+
+## Current Prediction Rendering
+
+The prediction endpoints currently return one FHIR Observation-style object per variant.
+
+Current rendering intent:
+
+- `Observation.code`: temporary code for oncogenicity prediction
+- `Observation.issued`: timestamp when the service generated the prediction
+- `Observation.extension`: custom extension carrying the originally submitted variant string in `valueString`
+- `Observation.valueInteger`: overall numeric score
+- `Observation.interpretation`: overall classification when available
+- one `Observation.component` per evidence pipeline
+- `component.code`: temporary code identifying the pipeline
+- `component.valueInteger`: pipeline score when the pipeline is available
+- `component.interpretation.coding.code`: pipeline evidence code such as `OP4`, `SBS1`, or `SBVS1`
+- `component.interpretation.text`: short clinician-facing evidence statement
+- `component.dataAbsentReason`: present instead of `component.valueInteger` when a pipeline is unavailable
+
+The current component list includes:
+
+- population
+- computational
+- hotspots
+- predictive
+- op2
+- functional
+
+Current serialization behavior:
+
+- prediction endpoints omit `null` fields from the JSON response
+- defaulted fields such as `resourceType="Observation"` and `status="final"` are still emitted
+
+The final client-facing result should not embed `AnnotatedVariant` or `NormalizedVariant`. Any normalization or annotation provenance needed by the client should be surfaced through the evidence output itself, primarily through fields such as:
+
+- `source`
+- `matchedData`
+- `evidenceStatement`
+
+## Known v1 Gaps
+
+- `OM1` is identified as in-scope but not implemented
+- final score-to-classification mapping is not implemented
+- the current FHIR response is one Observation per variant rather than a richer batch `Bundle`
+- some evidence policies remain intentionally narrow, especially exact-match functional lookups and the small curated OP2 rule table
 
 In the current REST response shape, the FATHMM-family fields exposed for this implementation are the `FATHMM-XF` dbNSFP keys with hyphenated names such as `fathmm-xf_coding_pred`.
 Although those field names are the ones we read from the response, the current Ensembl REST service returned `invalid_field` when they were requested explicitly, so the implementation uses `dbNSFP=ALL` and then extracts the needed keys from the response.

@@ -124,7 +124,7 @@ def build_predictive_evidence(
                 score=OVS1_SCORE,
                 evidenceCode="OVS1",
                 evidenceStatement=(
-                    f"OVS1: {consequence} variant in known tumor suppressor gene {gene}."
+                    f"{consequence} variant in known tumor suppressor gene {gene}."
                 ),
                 status="applied",
                 source="predictive",
@@ -200,7 +200,7 @@ def build_predictive_evidence(
                 score=SBP2_SCORE,
                 evidenceCode="SBP2",
                 evidenceStatement=(
-                    f"SBP2: Synonymous variant with low conservation scores in {gene or 'unknown gene'}."
+                    f"Synonymous variant with low conservation scores in {gene or 'unknown gene'}."
                 ),
                 status="applied",
                 source="predictive",
@@ -292,7 +292,7 @@ def _evaluate_os1(
         score=OS1_SCORE,
         evidenceCode="OS1",
         evidenceStatement=(
-            "OS1: Same amino acid change as a previously established somatic oncogenic ClinVar variant."
+            "Same amino acid change as a previously established somatic oncogenic ClinVar variant."
         ),
         status="applied",
         source="predictive",
@@ -340,7 +340,7 @@ def _evaluate_om4(
         score=OM4_SCORE,
         evidenceCode="OM4",
         evidenceStatement=(
-            "OM4: Missense variant at an amino acid residue where a different "
+            "Missense variant at an amino acid residue where a different "
             "somatic oncogenic missense variant is established in ClinVar."
         ),
         status="applied",
@@ -580,12 +580,12 @@ def _build_om2_statement(
     resolved_gene_role: str | None,
 ) -> str:
     if consequence == "stop_lost":
-        return f"OM2: stop_lost variant in known tumor suppressor gene {gene}."
+        return f"stop_lost variant in known tumor suppressor gene {gene}."
     if gene_role in {GENE_ROLE_ONCOGENE, GENE_ROLE_BOTH}:
-        return f"OM2: {consequence} variant in known cancer gene {gene}."
+        return f"{consequence} variant in known cancer gene {gene}."
     if resolved_gene_role == GENE_ROLE_TSG:
-        return f"OM2: {consequence} variant in known tumor suppressor gene {gene}."
-    return f"OM2: {consequence} variant in known tumor suppressor gene {gene}."
+        return f"{consequence} variant in known tumor suppressor gene {gene}."
+    return f"{consequence} variant in known tumor suppressor gene {gene}."
 
 
 def _not_available_result(

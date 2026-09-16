@@ -1,6 +1,11 @@
 # Oncogenicity Predictor
 
-This repository currently contains a minimal FastAPI service for validating local startup, Render deployment, normalization, annotation, the population, computational, hotspot, predictive, and functional evidence pipelines, and an initial FHIR Observation-style prediction output.
+This repository currently contains a minimal FastAPI service for validating local startup, Render deployment, normalization, annotation, the population, computational, hotspot, predictive, OM1, OP2, and functional evidence pipelines, and an initial FHIR Observation-style prediction output.
+
+## Documentation
+
+- [docs/evidence-and-scoring.md](/mnt/c/Users/BobDolin/Documents/GitHub/oncogenicity-predictor/docs/evidence-and-scoring.md): current evidence rule logic, data dependencies, and scoring semantics
+- [docs/architecture-notes.md](/mnt/c/Users/BobDolin/Documents/GitHub/oncogenicity-predictor/docs/architecture-notes.md): current system architecture, flow, and implementation notes
 
 ## Endpoints
 
@@ -44,7 +49,7 @@ After deployment, the interactive API docs should be available at `/docs` on the
 
 This is an incremental implementation.
 
-- Current behavior: ClinGen-backed normalization, Ensembl VEP annotation, population, computational, hotspot, predictive, and ClinMAVE-backed functional evidence scoring, and single-Observation prediction output for the prediction endpoints
+- Current behavior: ClinGen-backed normalization, Ensembl VEP annotation, population, computational, hotspot, predictive, OM1, OP2, and ClinMAVE-backed functional evidence scoring, and single-Observation prediction output for the prediction endpoints
 - Planned later behavior: additional evidence pipelines, richer scoring/classification, and batch FHIR `Bundle` responses
 
 At the moment, the normalization and annotation path requires submitted variants to be in HGVS format.
@@ -135,6 +140,8 @@ The current computational pipeline is intentionally narrow:
 The bundled hotspot workbook at `data/hotspots_v2.xlsx` is sourced from Cancer Hotspots: https://www.cancerhotspots.org/#/home
 
 The current hotspot pipeline loads that workbook into an in-memory cache on first use. It applies the legacy `OS3`, `OM3`, and `OP3` thresholds using exact gene plus protein-event matching, with SNVs requiring exact amino-acid substitution agreement and indels limited to direct matches supported by the workbook's native representation.
+
+The current OM1 pipeline uses the curated local ClinGen-derived table at `data/om1_clingen_domains_seed.csv`. Runtime evaluation is intentionally limited to rows with `rowStatus=ready`, requires a MANE Select transcript consequence with a localized protein-altering event and resolvable residue position or span, and applies `OM1` with score `2` when that event overlaps a curated critical domain interval.
 
 Coordinate conventions currently used by the normalizer include:
 

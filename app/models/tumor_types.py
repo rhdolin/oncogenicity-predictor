@@ -4,10 +4,13 @@ from typing import Literal, get_args
 TumorType = Literal[
     "Bladder Carcinoma",
     "Breast Cancer",
+    "Granulosa Cell Tumor",
+    "Hairy Cell Leukemia",
     "Hodgkin Lymphoma",
     "Neuroblastoma",
     "Parathyroid Carcinoma",
     "Peripheral T-Cell Lymphoma",
+    "Retinoblastoma",
     "Renal Cell Carcinoma",
     "T-Cell Acute Lymphoblastic Leukemia",
     "T-Cell Lymphoblastic Lymphoma",

@@ -21,6 +21,8 @@ class OncogenicityEvidence(BaseModel):
     computational: EvidenceResult
     hotspots: EvidenceResult
     predictive: EvidenceResult
+    om1: EvidenceResult
+    op2: EvidenceResult
     functional: EvidenceResult
 
 

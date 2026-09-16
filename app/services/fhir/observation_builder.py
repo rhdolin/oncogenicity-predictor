@@ -125,6 +125,8 @@ def build_oncogenicity_observation(
                 "predictive",
                 summary.oncogenicityEvidence.predictive,
             ),
+            _build_pipeline_component("om1", summary.oncogenicityEvidence.om1),
+            _build_pipeline_component("op2", summary.oncogenicityEvidence.op2),
             _build_pipeline_component("functional", summary.oncogenicityEvidence.functional),
         ],
     )

@@ -15,6 +15,8 @@ from app.services.evidence import (
     build_computational_evidence,
     build_functional_evidence,
     build_hotspots_evidence,
+    build_om1_evidence,
+    build_op2_evidence,
     build_population_evidence,
     build_predictive_evidence,
 )
@@ -34,6 +36,8 @@ def build_prediction_summary_from_annotated_variant(
             annotated_variant,
             tumor_type=tumor_type,
         ),
+        om1=build_om1_evidence(annotated_variant),
+        op2=build_op2_evidence(annotated_variant, tumor_type=tumor_type),
         functional=build_functional_evidence(annotated_variant, tumor_type=tumor_type),
     )
 

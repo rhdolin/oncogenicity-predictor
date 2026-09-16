@@ -23,7 +23,7 @@
 ## Current Implementation Slice
 
 - The deployed API has already been validated on Render.
-- The current non-stub implementation slice is variant normalization, first-pass annotation, the population, computational, hotspot, predictive, and functional evidence pipelines, and initial FHIR Observation rendering.
+- The current non-stub implementation slice is variant normalization, first-pass annotation, the population, computational, hotspot, predictive, OM1, OP2, and functional evidence pipelines, and initial FHIR Observation rendering.
 - `GET /annotateVariant` returns the internal annotation-layer result, `GET /summarizeEvidence` returns the raw evidence summary before FHIR mapping, and `GET /predictOncogenicity` plus `POST /predictOncogenicity` return FHIR Observation-style prediction payloads.
 - Submitted variants must currently be provided in HGVS format.
 - The route layer calls orchestration entrypoints. The annotation-only flow delegates to the ClinGen-backed variant normalizer and then the VEP-backed variant annotator, while the prediction flow continues through evidence building, score aggregation, and FHIR Observation mapping.
@@ -40,7 +40,7 @@
 - `annotationError` is present when VEP annotation fails and currently captures the source, message, and attempted query forms.
 - `basicAnnotation.mostSevereConsequence` comes from VEP `most_severe_consequence`.
 - `basicAnnotation.transcriptConsequences` keeps only RefSeq transcript rows whose `transcript_id` starts with `NM_`.
-- Each retained transcript consequence currently includes `transcriptRefSeq`, `consequenceTerms`, `proteinStart`, `proteinEnd`, `aminoAcids`, and `isManeSelect`.
+- Each retained transcript consequence currently includes `transcriptRefSeq`, `consequenceTerms`, `proteinStart`, `proteinEnd`, `aminoAcids`, `proteinHgvs`, `proteinEventType`, `rawProteinHgvs`, and `isManeSelect`.
 - `basicAnnotation.population` collapses co-located allele frequencies into `maxSubpopulationAf`, `maxSubpopulationLabel`, `maxOverallAf`, and `maxOverallLabel`.
 - `computationalAnnotation` is intentionally lean in v1 and currently includes `cadd`, `phyloP100wayVertebrate`, and `fathmmXfCoding`.
 - On annotation failure, the API still returns `AnnotatedVariant` with `normalizedVariant` populated, `annotationStatus="failed"`, `annotationError` populated, and both annotation sections set to `null`.
@@ -49,6 +49,7 @@
 
 - Population data: Ensembl VEP co-located variant frequencies from gnomAD exomes (`gnomade*`) and gnomAD genomes (`gnomadg*`)
 - Functional data: retained local ClinMAVE per-gene CSV exports
+- OM1 domain data: curated local ClinGen-derived MANE-anchored CSV intervals
 - Predictive data: VEP and ClinVar
 - Cancer hotspots
 - Computational evidence: broad `OP1` support from high `CADD`, plus missense-only `SBP1` benign concordance with `FATHMM-XF`
@@ -86,7 +87,9 @@ The current retained ClinMAVE panel is:
 
 `data/clinmave/genes.txt` is the source-of-truth manifest for that retained local panel.
 
-Prediction and evidence-summary endpoints now also accept an optional `tumorType` input for context-dependent evidence logic. The current concrete use case is `GATA3`, which can resolve to oncogene or tumor suppressor gene behavior depending on tumor type.
+Prediction and evidence-summary endpoints now also accept an optional `tumorType` input for context-dependent evidence logic. Current concrete uses are `GATA3`, which can resolve to oncogene or tumor suppressor gene behavior depending on tumor type, and `OP2`, which uses a small curated rules table in `data/op2_rules.csv` with optional MANE protein HGVS matching.
+
+OM1 uses `data/om1_clingen_domains_seed.csv` as a local ClinGen-derived runtime table. The current implementation only operationalizes rows marked `rowStatus=ready`, requires a MANE Select transcript consequence, and matches localized protein residue positions or spans against curated domain intervals.
 
 The detailed rule specification for these pipelines and the final score layer lives in `docs/evidence-and-scoring.md`.
 
@@ -138,6 +141,7 @@ oncogenicity-predictor/
 │   │   │   ├── population.py
 │   │   │   ├── functional.py
 │   │   │   ├── predictive.py
+│   │   │   ├── om1.py
 │   │   │   ├── hotspots.py
 │   │   │   └── computational.py
 │   │   ├── scoring/
