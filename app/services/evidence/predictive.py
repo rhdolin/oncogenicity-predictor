@@ -8,6 +8,7 @@ summaries are filtered locally against exact protein aliases.
 
 import os
 import re
+import time
 
 import httpx
 
@@ -26,6 +27,7 @@ from app.services.evidence.gene_roles import (
 CLINVAR_ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 CLINVAR_ESUMMARY_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 NCBI_TOOL = "oncogenicity-predictor"
+NCBI_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 NULL_VARIANT_TERMS = {
     "transcript_ablation",
     "frameshift_variant",
@@ -45,10 +47,90 @@ OM2_SCORE = 2
 OM4_SCORE = 2
 SBP2_SCORE = -1
 SBP2_PHYLOP_THRESHOLD = 2.0
+_last_ncbi_request_started_at = 0.0
 
 
 class ClinVarLookupError(Exception):
     """Raised when ClinVar cannot be queried or returns an unusable payload."""
+
+
+def _get_ncbi_min_request_interval_seconds() -> float:
+    configured_interval = os.getenv("NCBI_MIN_REQUEST_INTERVAL_SECONDS")
+    if configured_interval is not None:
+        return max(float(configured_interval), 0.0)
+    return 0.1 if os.getenv("NCBI_API_KEY") else 0.34
+
+
+def _get_ncbi_max_retries() -> int:
+    configured_retries = os.getenv("NCBI_MAX_RETRIES")
+    if configured_retries is not None:
+        return max(int(configured_retries), 0)
+    return 2
+
+
+def _get_ncbi_retry_delay_seconds() -> float:
+    configured_delay = os.getenv("NCBI_RETRY_DELAY_SECONDS")
+    if configured_delay is not None:
+        return max(float(configured_delay), 0.0)
+    return 1.0
+
+
+def _pace_ncbi_request() -> None:
+    global _last_ncbi_request_started_at
+
+    min_interval_seconds = _get_ncbi_min_request_interval_seconds()
+    if min_interval_seconds <= 0:
+        _last_ncbi_request_started_at = time.monotonic()
+        return
+
+    now = time.monotonic()
+    elapsed = now - _last_ncbi_request_started_at
+    if elapsed < min_interval_seconds:
+        time.sleep(min_interval_seconds - elapsed)
+        now = time.monotonic()
+
+    _last_ncbi_request_started_at = now
+
+
+def _get_retry_delay_seconds(response: httpx.Response | None, attempt: int) -> float:
+    if response is not None:
+        retry_after_header = response.headers.get("Retry-After")
+        if retry_after_header is not None:
+            try:
+                return max(float(retry_after_header), 0.0)
+            except ValueError:
+                pass
+
+    base_delay = _get_ncbi_retry_delay_seconds()
+    return base_delay * (attempt + 1)
+
+
+def _get_ncbi_json(url: str, params: dict[str, str | int]) -> dict:
+    max_retries = _get_ncbi_max_retries()
+
+    for attempt in range(max_retries + 1):
+        _pace_ncbi_request()
+        try:
+            response = httpx.get(url, params=params, timeout=30.0)
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            if status_code in NCBI_RETRYABLE_STATUS_CODES and attempt < max_retries:
+                time.sleep(_get_retry_delay_seconds(exc.response, attempt))
+                continue
+            raise ClinVarLookupError("ClinVar request failed.") from exc
+        except httpx.HTTPError as exc:
+            if attempt < max_retries:
+                time.sleep(_get_retry_delay_seconds(response=None, attempt=attempt))
+                continue
+            raise ClinVarLookupError("ClinVar request failed.") from exc
+
+        if not isinstance(payload, dict):
+            raise ClinVarLookupError("ClinVar returned an unexpected payload.")
+        return payload
+
+    raise ClinVarLookupError("ClinVar request failed.")
 
 
 def build_predictive_evidence(
@@ -366,13 +448,7 @@ def search_clinvar_variation_ids(query: str, retmax: int = 100) -> list[str]:
     if api_key:
         params["api_key"] = api_key
 
-    try:
-        response = httpx.get(CLINVAR_ESEARCH_URL, params=params, timeout=30.0)
-        response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise ClinVarLookupError("ClinVar ESearch failed.") from exc
-
-    payload = response.json()
+    payload = _get_ncbi_json(CLINVAR_ESEARCH_URL, params)
     results = payload.get("esearchresult", {})
     id_list = results.get("idlist")
     if not isinstance(id_list, list):
@@ -398,13 +474,7 @@ def fetch_clinvar_summaries(variation_ids: list[str]) -> dict[str, dict]:
     if api_key:
         params["api_key"] = api_key
 
-    try:
-        response = httpx.get(CLINVAR_ESUMMARY_URL, params=params, timeout=30.0)
-        response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise ClinVarLookupError("ClinVar ESummary failed.") from exc
-
-    payload = response.json()
+    payload = _get_ncbi_json(CLINVAR_ESUMMARY_URL, params)
     result = payload.get("result")
     if not isinstance(result, dict):
         raise ClinVarLookupError("ClinVar ESummary returned an unexpected payload.")

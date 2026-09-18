@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 import pytest
 from datetime import datetime
+import httpx
 
 from app.main import app
 from app.models.annotated_variant import AnnotatedVariant, BasicAnnotation, TranscriptConsequence
@@ -1670,6 +1671,75 @@ def test_predictive_om4_matches_different_same_residue_oncogenic_variant(
     assert predictive_evidence["evidenceCode"] == "OM4"
     assert predictive_evidence["matchedData"]["matchedVariationId"] == "13964"
     assert predictive_evidence["matchedData"]["matchedRule"] == "OM4"
+
+
+def test_get_ncbi_json_retries_after_429(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"count": 0}
+
+    def fake_get(url: str, params: dict, timeout: float) -> httpx.Response:
+        calls["count"] += 1
+        request = httpx.Request("GET", url, params=params)
+        if calls["count"] == 1:
+            response = httpx.Response(
+                429,
+                request=request,
+                headers={"Retry-After": "0"},
+                json={"error": "API rate limit exceeded"},
+            )
+            raise httpx.HTTPStatusError(
+                "Client error '429 Too Many Requests'",
+                request=request,
+                response=response,
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            json={"esearchresult": {"idlist": ["12345"]}},
+        )
+
+    monkeypatch.setattr(predictive, "_pace_ncbi_request", lambda: None)
+    monkeypatch.setattr(predictive.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(predictive, "_get_ncbi_max_retries", lambda: 1)
+    monkeypatch.setattr(predictive.httpx, "get", fake_get)
+
+    payload = predictive._get_ncbi_json(
+        predictive.CLINVAR_ESEARCH_URL,
+        {"db": "clinvar", "term": "FLT3[gene] AND Y842[varnam]", "retmode": "json", "retmax": 100, "tool": "oncogenicity-predictor"},
+    )
+
+    assert payload == {"esearchresult": {"idlist": ["12345"]}}
+    assert calls["count"] == 2
+
+
+def test_get_ncbi_json_raises_after_exhausted_429_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get(url: str, params: dict, timeout: float) -> httpx.Response:
+        request = httpx.Request("GET", url, params=params)
+        response = httpx.Response(
+            429,
+            request=request,
+            headers={"Retry-After": "0"},
+            json={"error": "API rate limit exceeded"},
+        )
+        raise httpx.HTTPStatusError(
+            "Client error '429 Too Many Requests'",
+            request=request,
+            response=response,
+        )
+
+    monkeypatch.setattr(predictive, "_pace_ncbi_request", lambda: None)
+    monkeypatch.setattr(predictive.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(predictive, "_get_ncbi_max_retries", lambda: 1)
+    monkeypatch.setattr(predictive.httpx, "get", fake_get)
+
+    with pytest.raises(predictive.ClinVarLookupError):
+        predictive._get_ncbi_json(
+            predictive.CLINVAR_ESEARCH_URL,
+            {"db": "clinvar", "term": "FLT3[gene] AND Y842[varnam]", "retmode": "json", "retmax": 100, "tool": "oncogenicity-predictor"},
+        )
 
 
 def test_scoring_interactions_suppress_om2_when_ovs1_is_present() -> None:

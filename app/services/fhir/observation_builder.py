@@ -26,6 +26,8 @@ SUBMITTED_VARIANT_EXTENSION_URL = (
 )
 PROTOTYPE_DISCLAIMER = (
     "This oncogenicity predictor is a rapid prototyping implementation intended to support experimentation. "
+    "It is a wholly automated algorithm based on curated knowledge sets that are evolving and generally capture only a subset of the knowledge present in the medical literature. "
+    "As a result, the algorithm can undercall oncogenicity scores, especially relative to pipelines that include manual curation. "
     "This algorithm is not fit for actual clinical use and must not be used "
     "for patient care or clinical decision-making."
 )

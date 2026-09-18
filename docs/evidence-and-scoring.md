@@ -500,6 +500,8 @@ Current score-to-classification mapping is:
 
 The manuscript's explicit exclusion rules above are implemented. Other comments and caveats from Tables 2 and 3 are currently documented as future refinement areas rather than automated logic.
 
+More broadly, the current v1 implementation intentionally does not attempt to encode the full set of disease-specific, gene-specific, and expert-panel-specific caveats that appear across published interpretation frameworks. That includes population-threshold overrides, assay-strength downgrades, transcript and splicing caveats, domain-specific exceptions, and other special-case logic that often depends on narrow curation context. The current implementation therefore follows a smaller automated core rule set and will sometimes disagree with manually curated pipelines even when the high-level rule names appear aligned.
+
 The highest-priority deferred caveats are:
 
 - `OVS1` nuance for extreme 3' end pLOF variants, splice-driven in-frame rescue, alternative isoforms, and multi-transcript interpretation
@@ -507,6 +509,7 @@ The highest-priority deferred caveats are:
 - hotspot caution for truncating-variant-driven hotspots
 - functional evidence downgrading when underlying studies are partial, conflicting, or otherwise insufficient to fully satisfy `OS2` or `SBS2`
 - population-threshold refinement for hereditary cancer predisposition genes where gene-specific germline guidance should influence frequency cutoffs
+- broader expert-panel and disease-specific exception handling for rules whose practical use depends on curated context beyond the generic v1 logic
 
 ## Current Prediction Rendering
 
@@ -548,7 +551,8 @@ The final client-facing result should not embed `AnnotatedVariant` or `Normalize
 
 - the current FHIR response is one Observation per variant rather than a richer batch `Bundle`
 - some evidence policies remain intentionally narrow, especially exact-match functional lookups and the small curated OP2 rule table
-- most manuscript caveats beyond explicit exclusion rules remain documented limitations rather than automated logic
+- many disease-specific, gene-specific, and expert-panel-specific caveats remain documented limitations rather than automated logic
+- generic thresholds and rule mappings are still used in places where mature frameworks apply narrower population, transcript, domain, or assay-specific exceptions
 
 In the current REST response shape, the FATHMM-family fields exposed for this implementation are the `FATHMM-XF` dbNSFP keys with hyphenated names such as `fathmm-xf_coding_pred`.
 Although those field names are the ones we read from the response, the current Ensembl REST service returned `invalid_field` when they were requested explicitly, so the implementation uses `dbNSFP=ALL` and then extracts the needed keys from the response.

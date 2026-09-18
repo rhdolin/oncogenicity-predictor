@@ -78,6 +78,8 @@ This is an incremental implementation.
 - Current behavior: ClinGen-backed normalization, Ensembl VEP annotation, population, computational, hotspot, predictive, OM1, OP2, and ClinMAVE-backed functional evidence scoring, and single-Observation prediction output for the prediction endpoints
 - Planned later behavior: additional evidence pipelines, further scoring refinements, and batch FHIR `Bundle` responses
 
+The current rule set is deliberately narrower than mature manual-curation frameworks. Many disease-specific, gene-specific, and expert-panel-specific caveats and special cases are still documented limitations in v1 rather than automated logic.
+
 At the moment, the normalization and annotation path requires submitted variants to be in HGVS format.
 
 The current annotation payload from `GET /annotateVariant` includes:
@@ -177,4 +179,6 @@ Coordinate conventions currently used by the normalizer include:
 ## Disclaimer
 
 This repository is a rapid prototyping implementation designed to support experimentation.
+It is a wholly automated algorithm based on curated knowledge sets that are evolving and generally capture only a subset of the knowledge present in the medical literature.
+As a result, the algorithm can undercall oncogenicity scores, especially relative to pipelines that include manual curation.
 It is not fit for actual clinical use and must not be used for patient care or clinical decision-making.

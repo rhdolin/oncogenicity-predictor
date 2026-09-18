@@ -177,6 +177,6 @@ Notes:
 - Prediction success/failure is currently expressed through the internal summary surface rather than by embedding the internal annotation result into the clinician-facing FHIR output.
 - FHIR rendering currently lives in `app/services/fhir/observation_builder.py` and is intentionally lightweight rather than profile-complete.
 
-Deferred manuscript caveats worth future implementation are currently documented in the evidence-and-scoring spec rather than automated. The highest-value deferred items remain `OVS1` splice and 3' end nuance, splicing-aware suppression of protein-level criteria, hotspot caution for truncating-driven hotspots, functional evidence downgrading, and hereditary predisposition population-threshold overrides.
+Deferred manuscript caveats worth future implementation are currently documented in the evidence-and-scoring spec rather than automated. More broadly, v1 intentionally leaves many disease-specific, gene-specific, and expert-panel-specific caveats unimplemented in favor of a smaller reproducible automated core. The highest-value deferred items remain `OVS1` splice and 3' end nuance, splicing-aware suppression of protein-level criteria, hotspot caution for truncating-driven hotspots, functional evidence downgrading, hereditary predisposition population-threshold overrides, and other expert-panel exception logic.
 
 The object is only created on successful normalization. Failures are handled as errors rather than partial `NormalizedVariant` instances.
