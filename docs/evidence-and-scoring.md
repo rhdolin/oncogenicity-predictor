@@ -20,11 +20,7 @@ The repository currently implements these evidence pipelines:
 - op2
 - functional
 
-The repository does not yet implement:
-
-- final score-to-classification mapping
-
-Current overall scoring simply sums the implemented pipeline scores. The service returns one FHIR Observation-style result per queried variant.
+Current overall scoring applies a small deterministic interaction-resolution step, sums only score-contributing evidence, maps the adjusted total into a final classification, and returns one FHIR Observation-style result per queried variant.
 
 ## Scope
 
@@ -46,6 +42,7 @@ Current model shape:
   "evidenceCode": "OP4",
   "evidenceStatement": "Present at low frequency in gnomAD (<=1%; observed 0.20%).",
   "status": "applied",
+  "suppressionReason": null,
   "source": "vep",
   "matchedData": {
     "maxSubpopulationAf": 0.002,
@@ -62,17 +59,26 @@ Current field meanings:
 - `score`: signed integer contribution from the pipeline
 - `evidenceCode`: the applied evidence code when one exists, otherwise `null`
 - `evidenceStatement`: human-readable explanation of the outcome
-- `status`: currently constrained to `applied` or `not_available`
+- `status`: currently constrained to `applied`, `suppressed`, or `not_available`
+- `suppressionReason`: top-level explanation when a matched criterion is excluded from final scoring
 - `source`: immediate source or pipeline label used by the rule
 - `matchedData`: structured audit trail for the decision when available
 - `dataAbsentReason`: reason token used when the pipeline is not available
 
 Current status semantics are intentionally narrow:
 
-- `applied` means the pipeline had enough information to evaluate its current rule set, including score `0` outcomes where no rule fired or where matching data supported a neutral outcome
+- `applied` means the pipeline had enough information to evaluate its current rule set and its score contributes to the final sum, including score `0` outcomes where no rule fired or where matching data supported a neutral outcome
+- `suppressed` means the pipeline matched a criterion with its original score and code preserved, but that criterion is excluded from final scoring by a deterministic interaction rule
 - `not_available` means the pipeline could not be defensibly evaluated because required annotation, context, or local source data was missing, unreadable, or unsupported
 
 Each evidence pipeline emits at most one result. When a pipeline contains multiple criteria, they are evaluated in a defined priority order and the first matching criterion wins. If no criterion matches but the pipeline had enough information to evaluate its current rule set, the pipeline returns a single `applied` result with score `0`.
+
+At the overall summary level, the service can also report prediction unavailability. When no evidence lanes are evaluable, the summary returns:
+
+- `overallScore = null`
+- `overallClassification = null`
+- top-level `dataAbsentReason`
+- top-level `predictionStatement`
 
 ## Population Pipeline
 
@@ -452,34 +458,55 @@ Current seeded examples include:
 - variant-restricted rows use exact equality against the MANE Select transcript consequence `proteinHgvs` value in normalized one-letter form, such as `p.V600E`
 - the current broad `RB1` retinoblastoma row does not require an additional mechanism-compatibility gate
 
-## Planned OM1 Pipeline
-
-`OM1` is not yet implemented in this repository.
-
-Current design context:
-
-- a legacy implementation exists in the sibling repository and uses a local critical-domain workbook
-- the current repository does not yet contain that workbook
-- no current v1 implementation or finalized local data asset exists here yet
-
-Until the local data source and exact behavior are ported or redesigned, this repository should treat `OM1` as a planned rule rather than as implemented behavior.
-
 ## Current Overall Score Aggregation
 
-Current overall scoring is intentionally minimal. The score is the sum of the currently implemented evidence pipelines:
+Current overall scoring is a three-step process:
+
+1. Evaluate each evidence pipeline independently.
+2. Apply deterministic interaction rules that suppress overlapping evidence.
+3. Sum only `applied` evidence scores and map the adjusted total to a final classification.
+
+The current evidence interaction rules are:
+
+- suppress `OS3` if `OS1` is applicable
+- suppress `OM1` if `OS1` or `OS3` is applicable
+- suppress `OM4` if `OS1`, `OS3`, or `OM1` is applicable
+- suppress `OM3` if `OM1` or `OM4` is applicable
+- suppress `OM2` if `OVS1` is applicable
+
+Current adjusted scoring considers these evidence lanes:
 
 - population
 - computational
 - hotspots
 - predictive
+- om1
+- op2
 - functional
 
-There is no separate weighting or post-processing layer beyond those per-pipeline scores.
+Suppressed and `not_available` lanes do not contribute to the final numeric score.
 
-There is not yet any contribution from:
+If all evidence lanes are `not_available`, the service does not emit a synthetic zero-score classification. Instead, the overall prediction is marked unavailable with `overallScore = null`, `overallClassification = null`, a top-level `dataAbsentReason`, and a top-level `predictionStatement`.
 
-- `OM1`
-- final classification logic
+Current score-to-classification mapping is:
+
+- `<= -7` -> `Benign`
+- `-6..-1` -> `Likely Benign`
+- `0..5` -> `VUS`
+- `6..9` -> `Likely Oncogenic`
+- `>= 10` -> `Oncogenic`
+
+## Current Deferred Caveats
+
+The manuscript's explicit exclusion rules above are implemented. Other comments and caveats from Tables 2 and 3 are currently documented as future refinement areas rather than automated logic.
+
+The highest-priority deferred caveats are:
+
+- `OVS1` nuance for extreme 3' end pLOF variants, splice-driven in-frame rescue, alternative isoforms, and multi-transcript interpretation
+- splicing-aware caution for protein-level criteria such as `OS1` and `OM4`, where the apparent amino-acid change may not reflect the true primary effect
+- hotspot caution for truncating-variant-driven hotspots
+- functional evidence downgrading when underlying studies are partial, conflicting, or otherwise insufficient to fully satisfy `OS2` or `SBS2`
+- population-threshold refinement for hereditary cancer predisposition genes where gene-specific germline guidance should influence frequency cutoffs
 
 ## Current Prediction Rendering
 
@@ -490,23 +517,21 @@ Current rendering intent:
 - `Observation.code`: temporary code for oncogenicity prediction
 - `Observation.issued`: timestamp when the service generated the prediction
 - `Observation.extension`: custom extension carrying the originally submitted variant string in `valueString`
-- `Observation.valueInteger`: overall numeric score
-- `Observation.interpretation`: overall classification when available
-- one `Observation.component` per evidence pipeline
+- `Observation.valueInteger`: overall numeric score when available
+- `Observation.interpretation`: final overall classification when available
+- `Observation.dataAbsentReason`: top-level unavailable-prediction signal when no evidence lanes are evaluable
+- zero or more `Observation.component` entries for score-contributing evidence
 - `component.code`: temporary code identifying the pipeline
-- `component.valueInteger`: pipeline score when the pipeline is available
+- `component.valueInteger`: pipeline score for an included applied evidence lane
 - `component.interpretation.coding.code`: pipeline evidence code such as `OP4`, `SBS1`, or `SBVS1`
 - `component.interpretation.text`: short clinician-facing evidence statement
-- `component.dataAbsentReason`: present instead of `component.valueInteger` when a pipeline is unavailable
 
-The current component list includes:
+The FHIR projection is intentionally compact:
 
-- population
-- computational
-- hotspots
-- predictive
-- op2
-- functional
+- include only evidence components where `status == "applied"` and `score != 0`
+- omit `suppressed` lanes, `not_available` lanes, and `applied` neutral lanes with score `0`
+- when no evidence lanes are evaluable, omit `valueInteger` and use top-level `dataAbsentReason` instead of forcing a numeric score/classification
+- rely on `GET /summarizeEvidence` for the full audit surface, including suppression and availability details
 
 Current serialization behavior:
 
@@ -521,10 +546,9 @@ The final client-facing result should not embed `AnnotatedVariant` or `Normalize
 
 ## Known v1 Gaps
 
-- `OM1` is identified as in-scope but not implemented
-- final score-to-classification mapping is not implemented
 - the current FHIR response is one Observation per variant rather than a richer batch `Bundle`
 - some evidence policies remain intentionally narrow, especially exact-match functional lookups and the small curated OP2 rule table
+- most manuscript caveats beyond explicit exclusion rules remain documented limitations rather than automated logic
 
 In the current REST response shape, the FATHMM-family fields exposed for this implementation are the `FATHMM-XF` dbNSFP keys with hyphenated names such as `fathmm-xf_coding_pred`.
 Although those field names are the ones we read from the response, the current Ensembl REST service returned `invalid_field` when they were requested explicitly, so the implementation uses `dbNSFP=ALL` and then extracts the needed keys from the response.

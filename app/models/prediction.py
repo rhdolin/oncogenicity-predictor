@@ -3,7 +3,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-EvidenceStatus = Literal["applied", "not_available"]
+EvidenceStatus = Literal["applied", "suppressed", "not_available"]
 
 
 class EvidenceResult(BaseModel):
@@ -11,6 +11,7 @@ class EvidenceResult(BaseModel):
     evidenceCode: str | None = None
     evidenceStatement: str
     status: EvidenceStatus
+    suppressionReason: str | None = None
     source: str | None = None
     matchedData: dict[str, Any] | None = None
     dataAbsentReason: str | None = None
@@ -27,8 +28,10 @@ class OncogenicityEvidence(BaseModel):
 
 
 class OncogenicityPredictionSummary(BaseModel):
-    overallScore: int
+    overallScore: int | None = None
     overallClassification: str | None = None
+    predictionStatement: str | None = None
+    dataAbsentReason: str | None = None
     oncogenicityEvidence: OncogenicityEvidence
 
 
@@ -64,8 +67,9 @@ class OncogenicityObservation(BaseModel):
     status: Literal["final"] = "final"
     issued: str
     code: CodeableConcept
-    valueInteger: int
+    valueInteger: int | None = None
     interpretation: list[CodeableConcept] = Field(default_factory=list)
+    dataAbsentReason: CodeableConcept | None = None
     extension: list[Extension] = Field(default_factory=list)
     note: list[Annotation] = Field(default_factory=list)
     component: list[ObservationComponent] = Field(default_factory=list)

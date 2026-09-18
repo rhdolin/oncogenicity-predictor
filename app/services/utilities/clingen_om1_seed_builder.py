@@ -683,7 +683,8 @@ def main(argv: Iterable[str] | None = None) -> int:
                 build_inventory_placeholder_row(
                     gene_symbol,
                     "no_applicable_rule",
-                    "Released ClinGen CSPEC found, but no applicable PM1 or OM1 rule text was available for extraction.",
+                    "Released ClinGen CSPEC found, but no applicable PM1 or "
+                    "OM1 rule text was available for extraction.",
                     spec_id=spec_id,
                     spec_api_url=spec_api_url,
                     spec_ui_url=spec_ui_url,
@@ -704,7 +705,9 @@ def main(argv: Iterable[str] | None = None) -> int:
                 build_inventory_placeholder_row(
                     gene_symbol,
                     "clingen_spec_not_released",
-                    f"ClinGen CSPEC record exists, but no specification is currently in an allowed release state for this build policy. Non-released specs: {spec_summaries}.",
+                    "ClinGen CSPEC record exists, but no specification is "
+                    "currently in an allowed release state for this build "
+                    f"policy. Non-released specs: {spec_summaries}.",
                 )
             )
             genes_with_rows.add(gene_symbol)

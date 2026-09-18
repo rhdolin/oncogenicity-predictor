@@ -1,0 +1,11 @@
+numInputRows,numPredictionUnavailable,numCriteriaTested,exactCriteriaSetMatches,exactCriteriaSetAgreementRate
+5,1,4,0,0.0
+
+numTested,numCriteriaTested,swimlane,same,within2,greaterThan2,sumCheck,exactAgreementRate,acceptableAgreementRate,largeDeviationRate,weightedScoreLinear,fuzzinessRatio,failureToExactRatio
+4,4,population,3,1,0,4,0.75,1.0,0.0,0.875,0.25,0.0
+4,4,computational,2,2,0,4,0.5,1.0,0.0,0.75,0.5,0.0
+4,4,hotspots,4,0,0,4,1.0,1.0,0.0,1.0,0.0,0.0
+4,4,predictive,4,0,0,4,1.0,1.0,0.0,1.0,0.0,0.0
+4,4,om1,2,2,0,4,0.5,1.0,0.0,0.75,0.5,0.0
+4,4,op2,4,0,0,4,1.0,1.0,0.0,1.0,0.0,0.0
+4,4,functional,2,0,2,4,0.5,0.5,0.5,0.5,0.0,1.0

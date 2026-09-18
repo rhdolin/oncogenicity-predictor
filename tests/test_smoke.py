@@ -5,6 +5,7 @@ from datetime import datetime
 from app.main import app
 from app.models.annotated_variant import AnnotatedVariant, BasicAnnotation, TranscriptConsequence
 from app.models.normalized_variant import NormalizationMetadata, NormalizedVariant
+from app.models.prediction import EvidenceResult, OncogenicityEvidence
 from app.services.annotation import variant_annotator
 from app.services.evidence import functional
 from app.services.evidence import gene_roles
@@ -13,6 +14,7 @@ from app.services.evidence import om1
 from app.services.evidence import op2
 from app.services.evidence import predictive
 from app.services.normalization import variant_normalizer
+from app.services.scoring import apply_evidence_interaction_rules
 
 
 REAL_FETCH_VEP_ANNOTATION_RECORD = variant_annotator.fetch_vep_annotation_record
@@ -156,6 +158,10 @@ def _component_by_code(body: dict, code: str) -> dict:
     )
 
 
+def _component_codes(body: dict) -> list[str]:
+    return [component["code"]["coding"][0]["code"] for component in body["component"]]
+
+
 def _write_op2_rules_csv(tmp_path, contents: str):
     path = tmp_path / "op2_rules.csv"
     path.write_text(contents, encoding="utf-8")
@@ -215,13 +221,14 @@ def test_predict_single_returns_observation() -> None:
     datetime.fromisoformat(body["issued"].replace("Z", "+00:00"))
     assert body["code"]["coding"][0]["code"] == "oncogenicity-prediction"
     assert body["valueInteger"] == 2
-    assert body["interpretation"] == []
+    assert body["interpretation"][0]["coding"][0]["code"] == "VUS"
     assert body["extension"] == [
         {
             "url": "https://oncogenicity-predictor.example/fhir/StructureDefinition/submitted-variant",
             "valueString": "NM_004119.3:c.2073T>G",
         }
     ]
+    assert _component_codes(body) == ["population-evidence", "computational-evidence"]
 
     population = _component_by_code(body, "population-evidence")
     assert population["valueInteger"] == 1
@@ -246,32 +253,6 @@ def test_predict_single_returns_observation() -> None:
         "CADD supports oncogenicity for this variant (PHRED 25.3; most severe consequence missense_variant)."
     )
     assert "dataAbsentReason" not in computational
-
-    hotspots = _component_by_code(body, "hotspots-evidence")
-    assert hotspots["valueInteger"] == 0
-    assert hotspots["interpretation"] == [
-        {
-            "coding": [],
-            "text": "Hotspots evidence did not meet current scoring criteria.",
-        }
-    ]
-    assert "dataAbsentReason" not in hotspots
-
-    predictive = _component_by_code(body, "predictive-evidence")
-    assert predictive["valueInteger"] == 0
-    assert predictive["interpretation"][0]["text"] == (
-        "Predictive evidence did not meet current scoring criteria."
-    )
-    assert "dataAbsentReason" not in predictive
-
-    om1_component = _component_by_code(body, "om1-evidence")
-    assert om1_component["dataAbsentReason"]["coding"][0]["code"] == "unsupported"
-
-    op2_component = _component_by_code(body, "op2-evidence")
-    assert op2_component["dataAbsentReason"]["coding"][0]["code"] == "unsupported"
-
-    functional = _component_by_code(body, "functional-evidence")
-    assert functional["dataAbsentReason"]["coding"][0]["code"] == "unsupported"
 
 
 def test_annotate_single_returns_annotated_variant() -> None:
@@ -302,7 +283,7 @@ def test_summarize_evidence_returns_raw_summary() -> None:
     body = response.json()
     assert body["overallScore"] == 2
     assert "overallClassification" in body
-    assert body["overallClassification"] is None
+    assert body["overallClassification"] == "VUS"
     assert body["oncogenicityEvidence"]["population"]["evidenceCode"] == "OP4"
     assert body["oncogenicityEvidence"]["population"]["matchedData"]["effectiveAf"] == 0.0002
     assert body["oncogenicityEvidence"]["computational"]["evidenceCode"] == "OP1"
@@ -323,7 +304,8 @@ def test_om1_braf_variant_in_curated_domain_applies(
 ) -> None:
     domains_path = _write_om1_domains_csv(
         tmp_path,
-        "geneSymbol,maneTranscript,maneProtein,domainName,startResidue,endResidue,excludedResidues,rowStatus,source,sourceVersion,notes\n"
+        "geneSymbol,maneTranscript,maneProtein,domainName,startResidue,"
+        "endResidue,excludedResidues,rowStatus,source,sourceVersion,notes\n"
         "BRAF,NM_004333.6,NP_004324.2,CR3 activation segment,594,627,,ready,ClinGen CSPEC,2.3,Curated row\n",
     )
     monkeypatch.setattr(om1, "OM1_DOMAINS_PATH", domains_path)
@@ -408,7 +390,8 @@ def test_om1_braf_variant_in_curated_domain_applies(
     assert om1_evidence["score"] == 2
     assert om1_evidence["evidenceCode"] == "OM1"
     assert om1_evidence["evidenceStatement"] == (
-        "Located in a critical and well-established functional domain defined in the curated local ClinGen domain table."
+        "Located in a critical and well-established functional domain defined "
+        "in the curated local ClinGen domain table."
     )
     assert om1_evidence["matchedData"]["matchedDomain"]["domainName"] == "CR3 activation segment"
 
@@ -419,7 +402,8 @@ def test_om1_braf_variant_outside_curated_domain_does_not_apply(
 ) -> None:
     domains_path = _write_om1_domains_csv(
         tmp_path,
-        "geneSymbol,maneTranscript,maneProtein,domainName,startResidue,endResidue,excludedResidues,rowStatus,source,sourceVersion,notes\n"
+        "geneSymbol,maneTranscript,maneProtein,domainName,startResidue,"
+        "endResidue,excludedResidues,rowStatus,source,sourceVersion,notes\n"
         "BRAF,NM_004333.6,NP_004324.2,CR3 activation segment,594,627,,ready,ClinGen CSPEC,2.3,Curated row\n",
     )
     monkeypatch.setattr(om1, "OM1_DOMAINS_PATH", domains_path)
@@ -1597,7 +1581,8 @@ def test_predictive_os1_rejects_same_residue_different_protein_change(
     assert predictive_evidence["score"] == 2
     assert predictive_evidence["evidenceCode"] == "OM4"
     assert predictive_evidence["evidenceStatement"] == (
-        "Missense variant at an amino acid residue where a different somatic oncogenic missense variant is established in ClinVar."
+        "Missense variant at an amino acid residue where a different somatic "
+        "oncogenic missense variant is established in ClinVar."
     )
 
 
@@ -1685,6 +1670,100 @@ def test_predictive_om4_matches_different_same_residue_oncogenic_variant(
     assert predictive_evidence["evidenceCode"] == "OM4"
     assert predictive_evidence["matchedData"]["matchedVariationId"] == "13964"
     assert predictive_evidence["matchedData"]["matchedRule"] == "OM4"
+
+
+def test_scoring_interactions_suppress_om2_when_ovs1_is_present() -> None:
+    evidence = OncogenicityEvidence(
+        population=EvidenceResult(
+            score=0,
+            evidenceCode=None,
+            evidenceStatement="Population evidence did not meet current scoring criteria.",
+            status="applied",
+        ),
+        computational=EvidenceResult(
+            score=0,
+            evidenceCode=None,
+            evidenceStatement="Computational evidence did not meet current scoring criteria.",
+            status="applied",
+        ),
+        hotspots=EvidenceResult(
+            score=0,
+            evidenceCode=None,
+            evidenceStatement="Hotspots evidence did not meet current scoring criteria.",
+            status="applied",
+        ),
+        predictive=EvidenceResult(
+            score=2,
+            evidenceCode="OM2",
+            evidenceStatement="inframe_deletion variant in known tumor suppressor gene TP53.",
+            status="applied",
+        ),
+        om1=EvidenceResult(
+            score=0,
+            evidenceCode=None,
+            evidenceStatement="OM1 evidence did not meet current scoring criteria.",
+            status="applied",
+        ),
+        op2=EvidenceResult(
+            score=0,
+            evidenceCode=None,
+            evidenceStatement="OP2 evidence did not meet current scoring criteria.",
+            status="applied",
+        ),
+        functional=EvidenceResult(
+            score=8,
+            evidenceCode="OVS1",
+            evidenceStatement="frameshift_variant in known tumor suppressor gene TP53.",
+            status="applied",
+        ),
+    )
+
+    suppressed = apply_evidence_interaction_rules(evidence.model_copy(update={
+        "functional": EvidenceResult(
+            score=0,
+            evidenceCode=None,
+            evidenceStatement="Functional evidence did not meet current scoring criteria.",
+            status="applied",
+        ),
+        "predictive": EvidenceResult(
+            score=8,
+            evidenceCode="OVS1",
+            evidenceStatement="frameshift_variant in known tumor suppressor gene TP53.",
+            status="applied",
+        ),
+    }))
+
+    assert suppressed.predictive.status == "applied"
+    assert suppressed.predictive.evidenceCode == "OVS1"
+
+    suppressed_om2 = apply_evidence_interaction_rules(
+        evidence.model_copy(
+            update={
+                "predictive": EvidenceResult(
+                    score=2,
+                    evidenceCode="OM2",
+                    evidenceStatement="inframe_deletion variant in known tumor suppressor gene TP53.",
+                    status="applied",
+                ),
+                "functional": EvidenceResult(
+                    score=0,
+                    evidenceCode=None,
+                    evidenceStatement="Functional evidence did not meet current scoring criteria.",
+                    status="applied",
+                ),
+                "om1": EvidenceResult(
+                    score=8,
+                    evidenceCode="OVS1",
+                    evidenceStatement="frameshift_variant in known tumor suppressor gene TP53.",
+                    status="applied",
+                ),
+            }
+        )
+    )
+
+    assert suppressed_om2.predictive.status == "suppressed"
+    assert suppressed_om2.predictive.score == 2
+    assert suppressed_om2.predictive.suppressionReason == "Suppressed because OVS1 is applicable."
 
 
 def test_predictive_ovs1_applies_for_frameshift_in_tsg() -> None:
@@ -1833,6 +1912,7 @@ def test_predict_single_returns_hotspot_component_when_hotspot_matches() -> None
     assert response.status_code == 200
     body = response.json()
     assert body["valueInteger"] == 6
+    assert body["interpretation"][0]["coding"][0]["code"] == "Likely Oncogenic"
 
     hotspot_component = _component_by_code(body, "hotspots-evidence")
     assert hotspot_component["valueInteger"] == 4
@@ -1857,10 +1937,58 @@ def test_summarize_evidence_returns_hotspot_match_data_when_present() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["overallScore"] == 6
+    assert body["overallClassification"] == "Likely Oncogenic"
     assert body["oncogenicityEvidence"]["hotspots"]["evidenceCode"] == "OS3"
     assert body["oncogenicityEvidence"]["hotspots"]["matchedData"]["gene"] == "FLT3"
     assert body["oncogenicityEvidence"]["hotspots"]["matchedData"]["position"] == 691
     assert body["oncogenicityEvidence"]["hotspots"]["matchedData"]["proteinHgvs"] == "p.F691L"
+
+
+def test_os1_suppresses_os3_in_summary_and_fhir(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(hotspots, "_get_hotspot_index", lambda: FAKE_HOTSPOT_INDEX)
+    monkeypatch.setattr(predictive, "search_clinvar_variation_ids", lambda query, retmax=100: ["40364"])
+    monkeypatch.setattr(
+        predictive,
+        "fetch_clinvar_summaries",
+        lambda variation_ids: {
+            "40364": {
+                "protein_change": "F691L",
+                "oncogenicity_classification": {"description": "Oncogenic"},
+                "title": "NM_004119.3(FLT3):c.2073T>G (p.Phe691Leu)",
+            }
+        },
+    )
+
+    summary_response = client.get(
+        "/summarizeEvidence",
+        params={"variant": "NM_004119.3:c.2073T>G"},
+    )
+    predict_response = client.get(
+        "/predictOncogenicity",
+        params={"variant": "NM_004119.3:c.2073T>G"},
+    )
+
+    assert summary_response.status_code == 200
+    summary_body = summary_response.json()
+    assert summary_body["overallScore"] == 6
+    assert summary_body["overallClassification"] == "Likely Oncogenic"
+    assert summary_body["oncogenicityEvidence"]["predictive"]["evidenceCode"] == "OS1"
+    assert summary_body["oncogenicityEvidence"]["predictive"]["status"] == "applied"
+    assert summary_body["oncogenicityEvidence"]["hotspots"]["evidenceCode"] == "OS3"
+    assert summary_body["oncogenicityEvidence"]["hotspots"]["status"] == "suppressed"
+    assert summary_body["oncogenicityEvidence"]["hotspots"]["score"] == 4
+    assert summary_body["oncogenicityEvidence"]["hotspots"]["suppressionReason"] == (
+        "Suppressed because OS1 is applicable."
+    )
+
+    assert predict_response.status_code == 200
+    predict_body = predict_response.json()
+    assert predict_body["valueInteger"] == 6
+    assert _component_codes(predict_body) == [
+        "population-evidence",
+        "computational-evidence",
+        "predictive-evidence",
+    ]
 
 
 def test_hotspot_indel_match_uses_protein_hgvs_bounds_before_vep_positions() -> None:
@@ -2315,11 +2443,9 @@ def test_predict_single_returns_failed_annotation_payload_when_vep_fails() -> No
 
     assert response.status_code == 200
     body = response.json()
-    assert body["valueInteger"] == 0
-    population = _component_by_code(body, "population-evidence")
-    assert "valueInteger" not in population
-    assert population["interpretation"] == []
-    assert population["dataAbsentReason"] == {
+    assert "valueInteger" not in body
+    assert body["interpretation"] == []
+    assert body["dataAbsentReason"] == {
         "coding": [
             {
                 "system": "http://terminology.hl7.org/CodeSystem/data-absent-reason",
@@ -2327,19 +2453,42 @@ def test_predict_single_returns_failed_annotation_payload_when_vep_fails() -> No
                 "display": "error",
             }
         ],
-        "text": "Population evidence could not be evaluated because annotation data was unavailable.",
+        "text": "Overall oncogenicity prediction could not be determined because variant annotation failed.",
     }
-    computational = _component_by_code(body, "computational-evidence")
-    assert computational["dataAbsentReason"] == {
-        "coding": [
-            {
-                "system": "http://terminology.hl7.org/CodeSystem/data-absent-reason",
-                "code": "error",
-                "display": "error",
-            }
-        ],
-        "text": "Computational evidence could not be evaluated because annotation data was unavailable.",
-    }
+    assert body["component"] == []
+
+
+def test_summarize_evidence_reports_prediction_unavailable_when_vep_fails() -> None:
+    monkeypatch_context = pytest.MonkeyPatch()
+    monkeypatch_context.setattr(
+        variant_annotator,
+        "fetch_vep_annotation_record",
+        lambda normalized_variant: (_ for _ in ()).throw(
+            variant_annotator.VariantAnnotationError(
+                "VEP annotation failed for all supported query forms.",
+                [
+                    "NC_000013.11:g.28027222A>C",
+                    "NM_004119.3:c.2073T>G",
+                ],
+            )
+        ),
+    )
+    try:
+        response = client.get(
+            "/summarizeEvidence",
+            params={"variant": "NM_004119.3:c.2073T>G"},
+        )
+    finally:
+        monkeypatch_context.undo()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["overallScore"] is None
+    assert body["overallClassification"] is None
+    assert body["dataAbsentReason"] == "error"
+    assert body["predictionStatement"] == (
+        "Overall oncogenicity prediction could not be determined because variant annotation failed."
+    )
 
 
 def test_annotate_single_returns_failed_annotation_payload_when_vep_fails() -> None:
@@ -2402,9 +2551,9 @@ def test_predict_batch_returns_mixed_success_and_failed_annotation_payloads() ->
     assert response.status_code == 200
     body = response.json()
     first_population = _component_by_code(body["observations"][0], "population-evidence")
-    second_population = _component_by_code(body["observations"][1], "population-evidence")
     assert first_population["valueInteger"] == 1
-    assert second_population["dataAbsentReason"]["coding"][0]["code"] == "error"
+    assert body["observations"][1]["dataAbsentReason"]["coding"][0]["code"] == "error"
+    assert body["observations"][1]["component"] == []
 
 
 def test_predict_single_returns_op4_when_population_data_is_missing() -> None:
@@ -2547,13 +2696,7 @@ def test_predict_single_returns_no_computational_code_for_low_cadd_non_missense(
     assert response.status_code == 200
     body = response.json()
     assert body["valueInteger"] == 3
-    computational = _component_by_code(body, "computational-evidence")
-    assert computational["valueInteger"] == 0
-    assert computational["interpretation"][0]["coding"] == []
-    assert computational["interpretation"][0]["text"] == (
-        "Computational missense benign rules were not applicable because the most severe consequence "
-        "was inframe_deletion."
-    )
+    assert _component_codes(body) == ["population-evidence", "predictive-evidence"]
     predictive = _component_by_code(body, "predictive-evidence")
     assert predictive["valueInteger"] == 2
     assert predictive["interpretation"][0]["coding"][0]["code"] == "OM2"

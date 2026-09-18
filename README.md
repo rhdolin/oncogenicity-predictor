@@ -6,6 +6,7 @@ This repository currently contains a minimal FastAPI service for validating loca
 
 - [docs/evidence-and-scoring.md](/mnt/c/Users/BobDolin/Documents/GitHub/oncogenicity-predictor/docs/evidence-and-scoring.md): current evidence rule logic, data dependencies, and scoring semantics
 - [docs/architecture-notes.md](/mnt/c/Users/BobDolin/Documents/GitHub/oncogenicity-predictor/docs/architecture-notes.md): current system architecture, flow, and implementation notes
+- [docs/evaluation.md](/mnt/c/Users/BobDolin/Documents/GitHub/oncogenicity-predictor/docs/evaluation.md): local reference-set evaluation workflow and output files
 
 ## Endpoints
 
@@ -18,10 +19,10 @@ This repository currently contains a minimal FastAPI service for validating loca
 - `GET /docs`
 
 The current `GET /annotateVariant` endpoint accepts a single variant in HGVS format, normalizes it through ClinGen, annotates it through Ensembl VEP, and returns the internal `AnnotatedVariant` JSON shape.
-The current `GET /summarizeEvidence` endpoint is an internal/debug endpoint that accepts a single variant in HGVS format and returns the raw evidence summary JSON before FHIR Observation mapping. It also accepts an optional `tumorType` query parameter used by context-dependent evidence rules.
-The current `GET /predictOncogenicity` endpoint accepts a single variant in HGVS format, normalizes it through ClinGen, annotates it through Ensembl VEP, evaluates the currently implemented evidence pipelines, and returns a single FHIR Observation-style prediction object. It also accepts an optional `tumorType` query parameter used by context-dependent evidence rules.
+The current `GET /summarizeEvidence` endpoint is an internal/debug endpoint that accepts a single variant in HGVS format and returns the raw evidence summary JSON before FHIR Observation mapping. It also accepts an optional `tumorType` query parameter used by context-dependent evidence rules. If no evidence lanes are evaluable, the summary returns a top-level `dataAbsentReason` plus a `predictionStatement`, and omits final score/classification.
+The current `GET /predictOncogenicity` endpoint accepts a single variant in HGVS format, normalizes it through ClinGen, annotates it through Ensembl VEP, evaluates the currently implemented evidence pipelines, and returns a single FHIR Observation-style prediction object with final classification when available plus only score-contributing evidence components. If no evidence lanes are evaluable, the FHIR Observation instead uses a top-level `dataAbsentReason`. It also accepts an optional `tumorType` query parameter used by context-dependent evidence rules.
 The current `POST /predictOncogenicity` endpoint accepts a list of variants in HGVS format and returns an `observations` list in that same shape. It also accepts an optional top-level `tumorType` field applied to every variant in the batch.
-If VEP annotation fails for a variant, the prediction endpoints still return a partial observation with `component.dataAbsentReason` set for the unavailable pipeline rather than failing the whole request.
+If VEP annotation fails for a variant, the prediction endpoints still return an in-band observation rather than failing the whole request, but the clinician-facing FHIR component list remains compact and may therefore be empty, with a top-level `dataAbsentReason` describing the unavailable overall prediction. The full audit surface lives in `GET /summarizeEvidence`.
 
 ## Local Run
 
@@ -32,6 +33,31 @@ uvicorn app.main:app --reload
 ```
 
 Then open `http://127.0.0.1:8000/docs`.
+
+## Evaluation
+
+The repository also includes a local evaluation workflow under `evaluation/`.
+
+- `evaluation/variantLists/variantList.csv`: selected reference set used for evaluation
+- `evaluation/variantLists/variantListMaster.csv`: larger reference-set source pool
+- `evaluation/runEvaluation.py`: single local script that runs the predictor, flattens FHIR output into `oncogenicityPredictions.csv`, stores the exact `/summarizeEvidence`-style JSON in `evidenceSummary`, and writes the two metric CSVs
+
+Run it from the repository root:
+
+```bash
+source .venv/bin/activate
+python evaluation/runEvaluation.py
+```
+
+It overwrites these stable output targets:
+
+- `evaluation/output/oncogenicityPredictions.csv`
+- `evaluation/output/metrics-category-based.csv`
+- `evaluation/output/metrics-score-based.csv`
+
+`variantList.csv` is the canonical evaluation input. Fully specified rows use integer `points` values plus JSON-list `criteria` values, but category-only rows are also allowed when a source provides only the final classification. Those rows leave `points` and `criteria` blank, preserve any legacy free-text note in `comments`, still participate in category-based evaluation, and are excluded from score- and criteria-based calculations. `variantListMaster.csv` uses the same mixed-detail schema, with `referenceDetailLevel` distinguishing fully specified rows from category-only rows.
+
+`oncogenicityPredictions.csv` keeps one row per variant from `variantList.csv` and includes the original reference-set columns translated into `reference*` fields, final FHIR-derived `predicted*` fields, a boolean `predictionUnavailable`, and the full internal `evidenceSummary` JSON for discrepancy review.
 
 ## Render Deployment
 
@@ -50,7 +76,7 @@ After deployment, the interactive API docs should be available at `/docs` on the
 This is an incremental implementation.
 
 - Current behavior: ClinGen-backed normalization, Ensembl VEP annotation, population, computational, hotspot, predictive, OM1, OP2, and ClinMAVE-backed functional evidence scoring, and single-Observation prediction output for the prediction endpoints
-- Planned later behavior: additional evidence pipelines, richer scoring/classification, and batch FHIR `Bundle` responses
+- Planned later behavior: additional evidence pipelines, further scoring refinements, and batch FHIR `Bundle` responses
 
 At the moment, the normalization and annotation path requires submitted variants to be in HGVS format.
 
@@ -81,12 +107,12 @@ The current prediction payload from `GET /predictOncogenicity` and `POST /predic
 
 - top-level `Observation.issued` for the prediction timestamp
 - top-level `Observation.extension` carrying the submitted variant HGVS string
-- top-level `Observation.valueInteger` for the overall score
-- top-level `Observation.interpretation`, currently omitted because classification is not yet implemented
-- one `component` per evidence pipeline
-- pipeline `component.valueInteger` for available pipeline scores
+- top-level `Observation.valueInteger` for the overall score when available
+- top-level `Observation.interpretation` for the final classification when available
+- top-level `Observation.dataAbsentReason` when the overall prediction is unavailable
+- one `component` per score-contributing applied evidence lane
+- pipeline `component.valueInteger` for included pipeline scores
 - pipeline `component.interpretation` for evidence code plus short evidence statement
-- pipeline `component.dataAbsentReason` for unavailable pipelines
 
 Current functional evidence behavior includes:
 

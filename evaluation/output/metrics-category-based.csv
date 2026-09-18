@@ -1,0 +1,8 @@
+numInputRows,numPredictionUnavailable,numCategoryTested,numScoreTested,observedAgreement,weightedAgreementLinear,expectedWeightedLinear,weightedKappaLinear,weightedAgreementQuadratic,expectedWeightedQuadratic,weightedKappaQuadratic,adjacentDisagreements,extremeDisagreements,diagonalAgreement,exactScoreAgreement,exactScoreAgreementRate,scoreWithin2,scoreWithin2Rate,scoreGreaterThan2,scoreGreaterThan2Rate
+5,1,4,4,0.5,0.625,0.5,0.25,0.6875,0.5625,0.2857142857142857,1,1,2,0,0.0,2,0.5,2,0.5
+
+Confusion Matrix (Reference -> Predicted)
+,Predicted_Benign,Predicted_VUS,Predicted_Oncogenic
+Reference_Benign,2,0,0
+Reference_VUS,0,0,0
+Reference_Oncogenic,1,1,0

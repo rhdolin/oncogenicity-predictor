@@ -80,6 +80,28 @@ def _build_pipeline_component(
     return component
 
 
+def _should_include_pipeline_component(evidence: EvidenceResult) -> bool:
+    return evidence.status == "applied" and evidence.score != 0
+
+
+def _build_scored_components(
+    summary: OncogenicityPredictionSummary,
+) -> list[ObservationComponent]:
+    components: list[ObservationComponent] = []
+    for pipeline_name, evidence in (
+        ("population", summary.oncogenicityEvidence.population),
+        ("computational", summary.oncogenicityEvidence.computational),
+        ("hotspots", summary.oncogenicityEvidence.hotspots),
+        ("predictive", summary.oncogenicityEvidence.predictive),
+        ("om1", summary.oncogenicityEvidence.om1),
+        ("op2", summary.oncogenicityEvidence.op2),
+        ("functional", summary.oncogenicityEvidence.functional),
+    ):
+        if _should_include_pipeline_component(evidence):
+            components.append(_build_pipeline_component(pipeline_name, evidence))
+    return components
+
+
 def build_oncogenicity_observation(
     summary: OncogenicityPredictionSummary,
     submitted_variant: str,
@@ -95,7 +117,7 @@ def build_oncogenicity_observation(
             )
         ]
 
-    return OncogenicityObservation(
+    observation = OncogenicityObservation(
         issued=datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
             "+00:00",
             "Z",
@@ -114,19 +136,19 @@ def build_oncogenicity_observation(
             )
         ],
         note=[Annotation(text=PROTOTYPE_DISCLAIMER)],
-        component=[
-            _build_pipeline_component("population", summary.oncogenicityEvidence.population),
-            _build_pipeline_component(
-                "computational",
-                summary.oncogenicityEvidence.computational,
-            ),
-            _build_pipeline_component("hotspots", summary.oncogenicityEvidence.hotspots),
-            _build_pipeline_component(
-                "predictive",
-                summary.oncogenicityEvidence.predictive,
-            ),
-            _build_pipeline_component("om1", summary.oncogenicityEvidence.om1),
-            _build_pipeline_component("op2", summary.oncogenicityEvidence.op2),
-            _build_pipeline_component("functional", summary.oncogenicityEvidence.functional),
-        ],
+        component=_build_scored_components(summary),
     )
+
+    if summary.dataAbsentReason is not None:
+        observation.dataAbsentReason = CodeableConcept(
+            coding=[
+                Coding(
+                    system=DATA_ABSENT_REASON_SYSTEM,
+                    code=summary.dataAbsentReason,
+                    display=summary.dataAbsentReason,
+                )
+            ],
+            text=summary.predictionStatement,
+        )
+
+    return observation

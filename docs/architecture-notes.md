@@ -23,7 +23,7 @@
 ## Current Implementation Slice
 
 - The deployed API has already been validated on Render.
-- The current non-stub implementation slice is variant normalization, first-pass annotation, the population, computational, hotspot, predictive, OM1, OP2, and functional evidence pipelines, and initial FHIR Observation rendering.
+- The current non-stub implementation slice is variant normalization, first-pass annotation, the population, computational, hotspot, predictive, OM1, OP2, and functional evidence pipelines, plus final score aggregation, interaction suppression, and compact FHIR Observation rendering.
 - `GET /annotateVariant` returns the internal annotation-layer result, `GET /summarizeEvidence` returns the raw evidence summary before FHIR mapping, and `GET /predictOncogenicity` plus `POST /predictOncogenicity` return FHIR Observation-style prediction payloads.
 - Submitted variants must currently be provided in HGVS format.
 - The route layer calls orchestration entrypoints. The annotation-only flow delegates to the ClinGen-backed variant normalizer and then the VEP-backed variant annotator, while the prediction flow continues through evidence building, score aggregation, and FHIR Observation mapping.
@@ -91,6 +91,8 @@ Prediction and evidence-summary endpoints now also accept an optional `tumorType
 
 OM1 uses `data/om1_clingen_domains_seed.csv` as a local ClinGen-derived runtime table. The current implementation only operationalizes rows marked `rowStatus=ready`, requires a MANE Select transcript consequence, and matches localized protein residue positions or spans against curated domain intervals.
 
+Final scoring currently applies deterministic interaction suppression before summing scores. Suppressed evidence remains visible in the internal summary with `status="suppressed"` and a top-level `suppressionReason`, but only `applied` evidence contributes to the final `overallScore` and final classification.
+
 The detailed rule specification for these pipelines and the final score layer lives in `docs/evidence-and-scoring.md`.
 
 Client-facing prediction responses should surface any needed provenance through the evidence summary itself rather than by embedding internal normalization or annotation models.
@@ -107,10 +109,14 @@ Client-facing prediction responses should surface any needed provenance through 
 ## Evaluation Plan
 
 - Evaluation does not need to be surfaced through the public API.
-- A practical first approach is to use the batch `POST` response as the prediction artifact.
-- The returned FHIR `Bundle` should be flattened into a simple comparison table.
-- The flattened predictions can then be compared against a gold-standard CSV.
-- Metrics should emphasize concordance and classification accuracy, with room for stratified analysis later.
+- Evaluation is implemented as a local Python script rather than an HTTP-driven workflow.
+- The selected reference set lives at `evaluation/variantLists/variantList.csv`, retains the legacy `variant`, `gene`, `source`, `classification`, `points`, `criteria`, and `comments` field names, adds `referenceDetailLevel`, and supports both fully specified rows and category-only rows. When present, `points` are canonical integers and `criteria` are JSON-list values.
+- The larger source pool lives at `evaluation/variantLists/variantListMaster.csv`, uses the same mixed-detail schema, and preserves category-only source rows by marking them with `referenceDetailLevel = category_only`, leaving `points` plus `criteria` blank, and carrying the original free-text criteria note in `comments`.
+- The evaluation script builds the internal summary first, stores that exact `/summarizeEvidence`-style JSON as `evidenceSummary`, then derives the clinician-facing FHIR Observation and flattens that into one comparison row per input variant.
+- The flattened predictions are written to `evaluation/output/oncogenicityPredictions.csv` with `reference*` and `predicted*` columns plus `predictionUnavailable`.
+- Metrics are written to two separate CSVs: `evaluation/output/metrics-category-based.csv` for overall classification and score concordance, and `evaluation/output/metrics-score-based.csv` for exact criteria-set agreement and per-swimlane score agreement.
+- Category-only rows still participate in classification concordance. Rows without reference scores are excluded from score concordance, and rows without reference criteria are excluded from criteria and swimlane concordance.
+- Rows with `predictionUnavailable = true` are excluded from concordance metrics and counted separately.
 
 ## Reuse Plan From `llm-oncogenicity`
 
@@ -118,51 +124,20 @@ Client-facing prediction responses should surface any needed provenance through 
 - Likely to replace: LLM and RAG orchestration, older normalization flow, outdated MaveDB scoring assumptions, non-FHIR output surfaces
 - Migration strategy: treat the old repository as a source of reusable modules rather than as the base architecture for the new service
 
-## Illustrative Future Structure
+## Current Evaluation Structure
 
 ```text
 oncogenicity-predictor/
-├── app/
-│   ├── main.py
-│   ├── api/
-│   │   └── routes.py
-│   ├── models/
-│   │   ├── annotated_variant.py
-│   │   ├── normalized_variant.py
-│   │   └── requests.py
-│   ├── services/
-│   │   ├── normalization/
-│   │   │   └── variant_normalizer.py
-│   │   ├── orchestration/
-│   │   │   └── single_variant_pipeline.py
-│   │   ├── annotation/
-│   │   │   └── variant_annotator.py
-│   │   ├── evidence/
-│   │   │   ├── population.py
-│   │   │   ├── functional.py
-│   │   │   ├── predictive.py
-│   │   │   ├── om1.py
-│   │   │   ├── hotspots.py
-│   │   │   └── computational.py
-│   │   ├── scoring/
-│   │   │   └── calculator.py
-│   │   └── fhir/
-│   │       └── observation_builder.py
 ├── evaluation/
-│   ├── datasets/
-│   ├── runners/
-│   ├── metrics/
-│   └── reports/
-├── tests/
-├── docs/
-│   └── architecture-notes.md
-│   └── evidence-and-scoring.md
-├── requirements.txt
-├── render.yaml
-└── README.md
+│   ├── variantLists/
+│   │   ├── variantList.csv
+│   │   └── variantListMaster.csv
+│   ├── output/
+│   │   ├── oncogenicityPredictions.csv
+│   │   ├── metrics-category-based.csv
+│   │   └── metrics-score-based.csv
+│   └── runEvaluation.py
 ```
-
-This section is aspirational rather than a verbatim snapshot of the current repo layout.
 
 ## Near-Term Questions
 
@@ -197,9 +172,11 @@ Notes:
 - `GET /annotateVariant` currently returns `AnnotatedVariant`.
 - `GET /annotateVariant` is the explicit annotation-oriented single-variant endpoint.
 - `GET /summarizeEvidence` currently returns `OncogenicityPredictionSummary` and is intended as an internal/debug endpoint.
-- Prediction endpoints currently return a single FHIR Observation-style object with `issued`, a custom extension carrying the submitted variant HGVS string, an overall score, and one component per evidence pipeline.
+- Prediction endpoints currently return a single FHIR Observation-style object with `issued`, a custom extension carrying the submitted variant HGVS string, an overall score, a final classification, and only the score-contributing evidence components.
 - Batch prediction requests currently return an `observations` list of those prediction objects.
-- Prediction success/failure is currently expressed through component-level values versus `dataAbsentReason`, rather than by embedding the internal annotation result.
+- Prediction success/failure is currently expressed through the internal summary surface rather than by embedding the internal annotation result into the clinician-facing FHIR output.
 - FHIR rendering currently lives in `app/services/fhir/observation_builder.py` and is intentionally lightweight rather than profile-complete.
+
+Deferred manuscript caveats worth future implementation are currently documented in the evidence-and-scoring spec rather than automated. The highest-value deferred items remain `OVS1` splice and 3' end nuance, splicing-aware suppression of protein-level criteria, hotspot caution for truncating-driven hotspots, functional evidence downgrading, and hereditary predisposition population-threshold overrides.
 
 The object is only created on successful normalization. Failures are handled as errors rather than partial `NormalizedVariant` instances.

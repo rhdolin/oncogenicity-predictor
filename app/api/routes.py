@@ -69,14 +69,16 @@ def _summarize_variant_or_raise(
         "ClinGen Allele Registry, annotates it through Ensembl VEP, evaluates "
         "the currently implemented evidence pipelines, and returns a single "
         "FHIR Observation-style prediction object with `issued`, a custom "
-        "extension carrying the submitted variant, an overall score, "
-        "and one component per evidence pipeline. Also accepts an optional "
+        "extension carrying the submitted variant, an overall score, a final "
+        "classification when available, and score-contributing evidence components. "
+        "If no evidence lanes are evaluable, the Observation is returned with "
+        "a top-level data-absent reason instead. Also accepts an optional "
         "`tumorType` query parameter used by context-dependent evidence rules."
     ),
 )
 def predict_single(
     variant: str = Query(
-        description="Variant to normalize. Must be provided in HGVS format.",
+        description="Variant for which to predict oncogenicity. Must be provided in HGVS format.",
         examples=["NM_004119.3:c.2073T>G"],
     ),
     tumorType: TumorType | None = Query(
@@ -120,6 +122,8 @@ def annotate_single(
         "normalizes it through the ClinGen Allele Registry, annotates it through "
         "Ensembl VEP, evaluates the currently implemented evidence pipelines, "
         "and returns the raw evidence summary JSON before FHIR Observation mapping. "
+        "If no evidence lanes are evaluable, the summary exposes a top-level "
+        "data-absent reason and no final score or classification. "
         "Also accepts an optional `tumorType` query parameter used by context-dependent evidence rules."
     ),
 )
@@ -148,8 +152,10 @@ def summarize_single(
         "through ClinGen, annotates each one through Ensembl VEP, evaluates the "
         "currently implemented evidence pipelines, and returns a list of "
         "FHIR Observation-style prediction objects. Variants with annotation "
-        "failures are returned in-band as partial observations with pipeline "
-        "`dataAbsentReason` values rather than failing the whole batch. The request body "
+        "failures are returned in-band rather than failing the whole batch, but "
+        "the clinician-facing FHIR component list remains compact and may "
+        "therefore be empty for those variants, with a top-level data-absent "
+        "reason when the overall prediction is unavailable. The request body "
         "also accepts an optional top-level `tumorType` field applied to each batch entry."
     ),
 )

@@ -314,7 +314,9 @@ def _load_om1_domain_rows() -> tuple[Om1DomainRule, ...]:
         }
         if set(reader.fieldnames or []) != expected_columns:
             raise Om1DomainsError(
-                "expected columns geneSymbol,maneTranscript,maneProtein,domainName,startResidue,endResidue,excludedResidues,rowStatus,source,sourceVersion,notes"
+                "expected columns geneSymbol,maneTranscript,maneProtein,"
+                "domainName,startResidue,endResidue,excludedResidues,rowStatus,"
+                "source,sourceVersion,notes"
             )
 
         for row in reader:
@@ -327,7 +329,10 @@ def _load_om1_domain_rows() -> tuple[Om1DomainRule, ...]:
             start_residue = _parse_required_int(row.get("startResidue"))
             end_residue = _parse_required_int(row.get("endResidue"))
             if not gene_symbol or not mane_transcript or not domain_name:
-                raise Om1DomainsError("ready OM1 rows must include geneSymbol, maneTranscript, and domainName")
+                raise Om1DomainsError(
+                    "ready OM1 rows must include geneSymbol, maneTranscript, "
+                    "and domainName"
+                )
             rows.append(
                 Om1DomainRule(
                     gene_symbol=gene_symbol,
@@ -373,7 +378,9 @@ def _get_gene_domain_rows(
         }
         if set(reader.fieldnames or []) != expected_columns:
             raise Om1DomainsError(
-                "expected columns geneSymbol,maneTranscript,maneProtein,domainName,startResidue,endResidue,excludedResidues,rowStatus,source,sourceVersion,notes"
+                "expected columns geneSymbol,maneTranscript,maneProtein,"
+                "domainName,startResidue,endResidue,excludedResidues,rowStatus,"
+                "source,sourceVersion,notes"
             )
         for row in reader:
             if (row.get("geneSymbol") or "").strip().upper() == gene_symbol:

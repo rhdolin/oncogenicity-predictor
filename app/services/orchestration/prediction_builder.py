@@ -20,7 +20,11 @@ from app.services.evidence import (
     build_population_evidence,
     build_predictive_evidence,
 )
-from app.services.scoring import calculate_overall_score
+from app.services.scoring import (
+    apply_evidence_interaction_rules,
+    calculate_overall_score,
+    classify_overall_score,
+)
 
 
 def build_prediction_summary_from_annotated_variant(
@@ -41,8 +45,55 @@ def build_prediction_summary_from_annotated_variant(
         functional=build_functional_evidence(annotated_variant, tumor_type=tumor_type),
     )
 
+    adjusted_evidence = apply_evidence_interaction_rules(evidence)
+    if _all_evidence_not_available(adjusted_evidence):
+        return _build_unavailable_prediction_summary(annotated_variant, adjusted_evidence)
+
+    overall_score = calculate_overall_score(adjusted_evidence)
+
     return OncogenicityPredictionSummary(
-        overallScore=calculate_overall_score(evidence),
+        overallScore=overall_score,
+        overallClassification=classify_overall_score(overall_score),
+        predictionStatement="Overall oncogenicity prediction computed from the available evidence.",
+        dataAbsentReason=None,
+        oncogenicityEvidence=adjusted_evidence,
+    )
+
+
+def _all_evidence_not_available(evidence: OncogenicityEvidence) -> bool:
+    return all(
+        result.status == "not_available"
+        for result in (
+            evidence.population,
+            evidence.computational,
+            evidence.hotspots,
+            evidence.predictive,
+            evidence.om1,
+            evidence.op2,
+            evidence.functional,
+        )
+    )
+
+
+def _build_unavailable_prediction_summary(
+    annotated_variant: AnnotatedVariant,
+    evidence: OncogenicityEvidence,
+) -> OncogenicityPredictionSummary:
+    if annotated_variant.annotationStatus != "complete":
+        statement = (
+            "Overall oncogenicity prediction could not be determined because variant annotation failed."
+        )
+        absent_reason = "error"
+    else:
+        statement = (
+            "Overall oncogenicity prediction could not be determined because no evidence pipelines were evaluable."
+        )
+        absent_reason = "unsupported"
+
+    return OncogenicityPredictionSummary(
+        overallScore=None,
         overallClassification=None,
+        predictionStatement=statement,
+        dataAbsentReason=absent_reason,
         oncogenicityEvidence=evidence,
     )
