@@ -549,7 +549,6 @@ The final client-facing result should not embed `AnnotatedVariant` or `Normalize
 
 ## Known v1 Gaps
 
-- the current FHIR response is one Observation per variant rather than a richer batch `Bundle`
 - some evidence policies remain intentionally narrow, especially exact-match functional lookups and the small curated OP2 rule table
 - many disease-specific, gene-specific, and expert-panel-specific caveats remain documented limitations rather than automated logic
 - generic thresholds and rule mappings are still used in places where mature frameworks apply narrower population, transcript, domain, or assay-specific exceptions

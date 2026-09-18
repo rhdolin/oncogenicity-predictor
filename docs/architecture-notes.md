@@ -5,8 +5,7 @@
 - Framework: FastAPI
 - Deployment target: Render
 - Public contract: single-variant `GET` endpoints and batch `POST`
-- Current response format: `GET /annotateVariant` returns internal `AnnotatedVariant`; `GET /summarizeEvidence` returns the internal evidence summary; prediction endpoints return a single FHIR Observation-style prediction object
-- Target later response format: keep the single-variant FHIR `Observation` shape and add a FHIR `Bundle` for batch results
+- Current response format: `GET /annotateVariant` returns internal `AnnotatedVariant`; `GET /summarizeEvidence` returns the internal evidence summary; `GET /predictOncogenicity` returns a single FHIR `Observation`; `POST /predictOncogenicity` returns a FHIR `Bundle` containing one prediction `Observation` per input variant
 - Target client-facing prediction payload: FHIR Observation content built from evidence summary plus final score/classification, without embedding internal `AnnotatedVariant` or `NormalizedVariant` objects
 - Scope: deterministic service implementation of the scoring approach described in https://pmc.ncbi.nlm.nih.gov/articles/PMC9081216/
 
@@ -24,7 +23,7 @@
 
 - The deployed API has already been validated on Render.
 - The current non-stub implementation slice is variant normalization, first-pass annotation, the population, computational, hotspot, predictive, OM1, OP2, and functional evidence pipelines, plus final score aggregation, interaction suppression, and compact FHIR Observation rendering.
-- `GET /annotateVariant` returns the internal annotation-layer result, `GET /summarizeEvidence` returns the raw evidence summary before FHIR mapping, and `GET /predictOncogenicity` plus `POST /predictOncogenicity` return FHIR Observation-style prediction payloads.
+- `GET /annotateVariant` returns the internal annotation-layer result, `GET /summarizeEvidence` returns the raw evidence summary before FHIR mapping, `GET /predictOncogenicity` returns a single FHIR `Observation`, and `POST /predictOncogenicity` returns a FHIR `Bundle` of prediction `Observation` resources.
 - Submitted variants must currently be provided in HGVS format.
 - The route layer calls orchestration entrypoints. The annotation-only flow delegates to the ClinGen-backed variant normalizer and then the VEP-backed variant annotator, while the prediction flow continues through evidence building, score aggregation, and FHIR Observation mapping.
 - `canonical_b37` is currently populated only from a transcript allele that has a `genomeAlignments` entry for `GRCh37`, using the first primary `NM_` HGVS string from that transcript.

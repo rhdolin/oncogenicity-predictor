@@ -1,12 +1,16 @@
 # Oncogenicity Predictor
 
-This repository currently contains a minimal FastAPI service for validating local startup, Render deployment, normalization, annotation, the population, computational, hotspot, predictive, OM1, OP2, and functional evidence pipelines, and an initial FHIR Observation-style prediction output.
+This project predicts the oncogenicity of genomic variants and reports the result using the ClinGen/CGC/VICC oncogenicity framework described at https://pmc.ncbi.nlm.nih.gov/articles/PMC9081216/.
+
+This repository contains a minimal FastAPI service that accepts HGVS variants, normalizes and annotates them, evaluates the currently implemented evidence pipelines, and returns an initial FHIR Observation-style oncogenicity prediction.
+
+The live API can be explored and tested directly at https://oncogenicity-predictor.onrender.com/docs.
 
 ## Documentation
 
-- [docs/evidence-and-scoring.md](/mnt/c/Users/BobDolin/Documents/GitHub/oncogenicity-predictor/docs/evidence-and-scoring.md): current evidence rule logic, data dependencies, and scoring semantics
-- [docs/architecture-notes.md](/mnt/c/Users/BobDolin/Documents/GitHub/oncogenicity-predictor/docs/architecture-notes.md): current system architecture, flow, and implementation notes
-- [docs/evaluation.md](/mnt/c/Users/BobDolin/Documents/GitHub/oncogenicity-predictor/docs/evaluation.md): local reference-set evaluation workflow and output files
+- [docs/evidence-and-scoring.md](docs/evidence-and-scoring.md): current evidence rule logic, data dependencies, and scoring semantics
+- [docs/architecture-notes.md](docs/architecture-notes.md): current system architecture, flow, and implementation notes
+- [docs/evaluation.md](docs/evaluation.md): evaluation workflow that compares the prediction output against a curated reference set.
 
 ## Endpoints
 
@@ -19,9 +23,9 @@ This repository currently contains a minimal FastAPI service for validating loca
 - `GET /docs`
 
 The current `GET /annotateVariant` endpoint accepts a single variant in HGVS format, normalizes it through ClinGen, annotates it through Ensembl VEP, and returns the internal `AnnotatedVariant` JSON shape.
-The current `GET /summarizeEvidence` endpoint is an internal/debug endpoint that accepts a single variant in HGVS format and returns the raw evidence summary JSON before FHIR Observation mapping. It also accepts an optional `tumorType` query parameter used by context-dependent evidence rules. If no evidence lanes are evaluable, the summary returns a top-level `dataAbsentReason` plus a `predictionStatement`, and omits final score/classification.
+The current `GET /summarizeEvidence` endpoint accepts a single variant in HGVS format and returns the raw evidence summary JSON before FHIR Observation mapping. It also accepts an optional `tumorType` query parameter used by context-dependent evidence rules. If no evidence lanes are evaluable, the summary returns a top-level `dataAbsentReason` plus a `predictionStatement`, and omits final score/classification.
 The current `GET /predictOncogenicity` endpoint accepts a single variant in HGVS format, normalizes it through ClinGen, annotates it through Ensembl VEP, evaluates the currently implemented evidence pipelines, and returns a single FHIR Observation-style prediction object with final classification when available plus only score-contributing evidence components. If no evidence lanes are evaluable, the FHIR Observation instead uses a top-level `dataAbsentReason`. It also accepts an optional `tumorType` query parameter used by context-dependent evidence rules.
-The current `POST /predictOncogenicity` endpoint accepts a list of variants in HGVS format and returns an `observations` list in that same shape. It also accepts an optional top-level `tumorType` field applied to every variant in the batch.
+The current `POST /predictOncogenicity` endpoint accepts a list of variants in HGVS format and returns a FHIR `Bundle` containing one `Observation` resource per input variant. It also accepts an optional top-level `tumorType` field applied to every variant in the batch.
 If VEP annotation fails for a variant, the prediction endpoints still return an in-band observation rather than failing the whole request, but the clinician-facing FHIR component list remains compact and may therefore be empty, with a top-level `dataAbsentReason` describing the unavailable overall prediction. The full audit surface lives in `GET /summarizeEvidence`.
 
 ## Local Run
@@ -69,14 +73,14 @@ Render will:
 - start the API with `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 - check service health at `/health`
 
-After deployment, the interactive API docs should be available at `/docs` on the Render URL.
+After deployment, the interactive API docs should be available at `/docs` on the Render URL, currently https://oncogenicity-predictor.onrender.com/docs.
 
 ## Current Scope
 
 This is an incremental implementation.
 
 - Current behavior: ClinGen-backed normalization, Ensembl VEP annotation, population, computational, hotspot, predictive, OM1, OP2, and ClinMAVE-backed functional evidence scoring, and single-Observation prediction output for the prediction endpoints
-- Planned later behavior: additional evidence pipelines, further scoring refinements, and batch FHIR `Bundle` responses
+- Planned later behavior: additional evidence pipelines and further scoring refinements
 
 The current rule set is deliberately narrower than mature manual-curation frameworks. Many disease-specific, gene-specific, and expert-panel-specific caveats and special cases are still documented limitations in v1 rather than automated logic.
 
@@ -105,7 +109,7 @@ Current annotation behavior includes:
 - no additional VEP fallback after those two attempts in v1
 - backfilling `transcript_hgvs.mane_select_b38` from VEP when ClinGen does not provide MANE Select but VEP does
 
-The current prediction payload from `GET /predictOncogenicity` and `POST /predictOncogenicity` includes:
+The current single-variant prediction payload from `GET /predictOncogenicity` includes:
 
 - top-level `Observation.issued` for the prediction timestamp
 - top-level `Observation.extension` carrying the submitted variant HGVS string
@@ -115,6 +119,13 @@ The current prediction payload from `GET /predictOncogenicity` and `POST /predic
 - one `component` per score-contributing applied evidence lane
 - pipeline `component.valueInteger` for included pipeline scores
 - pipeline `component.interpretation` for evidence code plus short evidence statement
+
+The current batch prediction payload from `POST /predictOncogenicity` includes:
+
+- top-level `Bundle.resourceType = "Bundle"`
+- top-level `Bundle.type = "collection"`
+- top-level `Bundle.total` for the number of returned prediction resources
+- one `entry.resource` per input variant, where each resource is the same FHIR `Observation` shape returned by `GET /predictOncogenicity`
 
 Current functional evidence behavior includes:
 

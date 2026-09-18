@@ -75,5 +75,12 @@ class OncogenicityObservation(BaseModel):
     component: list[ObservationComponent] = Field(default_factory=list)
 
 
-class OncogenicityPredictionBatchResponse(BaseModel):
-    observations: list[OncogenicityObservation]
+class BundleEntry(BaseModel):
+    resource: OncogenicityObservation
+
+
+class OncogenicityObservationBundle(BaseModel):
+    resourceType: Literal["Bundle"] = "Bundle"
+    type: Literal["collection"] = "collection"
+    total: int
+    entry: list[BundleEntry] = Field(default_factory=list)

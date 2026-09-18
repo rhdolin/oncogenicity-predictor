@@ -9,12 +9,14 @@ from datetime import datetime, timezone
 
 from app.models.prediction import (
     Annotation,
+    BundleEntry,
     CodeableConcept,
     Coding,
     EvidenceResult,
     Extension,
     ObservationComponent,
     OncogenicityObservation,
+    OncogenicityObservationBundle,
     OncogenicityPredictionSummary,
 )
 
@@ -154,3 +156,12 @@ def build_oncogenicity_observation(
         )
 
     return observation
+
+
+def build_oncogenicity_observation_bundle(
+    observations: list[OncogenicityObservation],
+) -> OncogenicityObservationBundle:
+    return OncogenicityObservationBundle(
+        total=len(observations),
+        entry=[BundleEntry(resource=observation) for observation in observations],
+    )

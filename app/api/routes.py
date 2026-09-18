@@ -10,11 +10,12 @@ from fastapi import APIRouter, HTTPException, Query
 from app.models.annotated_variant import AnnotatedVariant
 from app.models.prediction import (
     OncogenicityObservation,
-    OncogenicityPredictionBatchResponse,
+    OncogenicityObservationBundle,
     OncogenicityPredictionSummary,
 )
 from app.models.requests import BatchRequest
 from app.models.tumor_types import TUMOR_TYPE_VALUES, TumorType
+from app.services.fhir import build_oncogenicity_observation_bundle
 from app.services.normalization.variant_normalizer import VariantNormalizationError
 from app.services.orchestration.single_variant_pipeline import (
     run_single_variant_annotation_pipeline,
@@ -144,14 +145,14 @@ def summarize_single(
 
 @router.post(
     "/predictOncogenicity",
-    response_model=OncogenicityPredictionBatchResponse,
+    response_model=OncogenicityObservationBundle,
     response_model_exclude_none=True,
     summary="Predict oncogenicity for a batch of variants",
     description=(
         "Accepts a list of submitted variants in HGVS format, normalizes each one "
         "through ClinGen, annotates each one through Ensembl VEP, evaluates the "
-        "currently implemented evidence pipelines, and returns a list of "
-        "FHIR Observation-style prediction objects. Variants with annotation "
+        "currently implemented evidence pipelines, and returns a FHIR Bundle "
+        "containing one Observation-style prediction resource per input variant. Variants with annotation "
         "failures are returned in-band rather than failing the whole batch, but "
         "the clinician-facing FHIR component list remains compact and may "
         "therefore be empty for those variants, with a top-level data-absent "
@@ -159,10 +160,10 @@ def summarize_single(
         "also accepts an optional top-level `tumorType` field applied to each batch entry."
     ),
 )
-def predict_batch(request: BatchRequest) -> OncogenicityPredictionBatchResponse:
+def predict_batch(request: BatchRequest) -> OncogenicityObservationBundle:
     """Handle batch prediction requests by running the single-variant pipeline per input."""
     observations = [
         _predict_variant_or_raise(variant, tumor_type=request.tumorType)
         for variant in request.variants
     ]
-    return OncogenicityPredictionBatchResponse(observations=observations)
+    return build_oncogenicity_observation_bundle(observations)

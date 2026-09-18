@@ -1416,7 +1416,7 @@ def test_functional_conflicting_clinmave_rows_return_applied_zero(
     assert functional_evidence["matchedData"]["matchingRowCount"] == 2
 
 
-def test_predict_batch_returns_observations() -> None:
+def test_predict_batch_returns_bundle() -> None:
     response = client.post(
         "/predictOncogenicity",
         json={"variants": ["NM_004119.3:c.2073T>G", "ENST00000241453.12:c.2073T>G"]},
@@ -1424,9 +1424,13 @@ def test_predict_batch_returns_observations() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert len(body["observations"]) == 2
-    assert body["observations"][0]["valueInteger"] == 2
-    assert body["observations"][1]["valueInteger"] == 2
+    assert body["resourceType"] == "Bundle"
+    assert body["type"] == "collection"
+    assert body["total"] == 2
+    assert len(body["entry"]) == 2
+    assert body["entry"][0]["resource"]["resourceType"] == "Observation"
+    assert body["entry"][0]["resource"]["valueInteger"] == 2
+    assert body["entry"][1]["resource"]["valueInteger"] == 2
 
 
 def test_predictive_os1_matches_exact_protein_alias(monkeypatch: pytest.MonkeyPatch) -> None:
