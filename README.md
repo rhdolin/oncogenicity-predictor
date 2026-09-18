@@ -141,32 +141,7 @@ Current functional evidence behavior includes:
 
 The current retained ClinMAVE gene panel is:
 
-- `BRAF`
-- `KRAS`
-- `NRAS`
-- `HRAS`
-- `EGFR`
-- `ERBB2`
-- `ALK`
-- `MET`
-- `PIK3CA`
-- `AKT1`
-- `PTEN`
-- `TP53`
-- `NF1`
-- `ARID1A`
-- `SMAD4`
-- `JAK2`
-- `BRCA1`
-- `BRCA2`
-- `ATM`
-- `CHEK2`
-- `VHL`
-- `BAP1`
-- `CDK4`
-- `CDK6`
-- `GATA3`
-- `MYC`
+`AKT1`, `ALK`, `ARID1A`, `ATM`, `BAP1`, `BRAF`, `BRCA1`, `BRCA2`, `CDK4`, `CDK6`, `CHEK2`, `EGFR`, `ERBB2`, `GATA3`, `HRAS`, `JAK2`, `KRAS`, `MET`, `MYC`, `NF1`, `NRAS`, `PIK3CA`, `PTEN`, `SMAD4`, `TP53`, and `VHL`.
 
 `data/clinmave/genes.txt` is the source-of-truth manifest for that retained panel.
 

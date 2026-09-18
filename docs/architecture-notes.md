@@ -57,32 +57,7 @@ Functional evidence currently uses exact MANE transcript HGVS matching against C
 
 The current retained ClinMAVE panel is:
 
-- `BRAF`
-- `KRAS`
-- `NRAS`
-- `HRAS`
-- `EGFR`
-- `ERBB2`
-- `ALK`
-- `MET`
-- `PIK3CA`
-- `AKT1`
-- `PTEN`
-- `TP53`
-- `NF1`
-- `ARID1A`
-- `SMAD4`
-- `JAK2`
-- `BRCA1`
-- `BRCA2`
-- `ATM`
-- `CHEK2`
-- `VHL`
-- `BAP1`
-- `CDK4`
-- `CDK6`
-- `GATA3`
-- `MYC`
+`AKT1`, `ALK`, `ARID1A`, `ATM`, `BAP1`, `BRAF`, `BRCA1`, `BRCA2`, `CDK4`, `CDK6`, `CHEK2`, `EGFR`, `ERBB2`, `GATA3`, `HRAS`, `JAK2`, `KRAS`, `MET`, `MYC`, `NF1`, `NRAS`, `PIK3CA`, `PTEN`, `SMAD4`, `TP53`, and `VHL`.
 
 `data/clinmave/genes.txt` is the source-of-truth manifest for that retained local panel.
 
@@ -90,7 +65,7 @@ Prediction and evidence-summary endpoints now also accept an optional `tumorType
 
 OM1 uses `data/om1_clingen_domains_seed.csv` as a local ClinGen-derived runtime table. The current implementation only operationalizes rows marked `rowStatus=ready`, requires a MANE Select transcript consequence, and matches localized protein residue positions or spans against curated domain intervals.
 
-Final scoring currently applies deterministic interaction suppression before summing scores. Suppressed evidence remains visible in the internal summary with `status="suppressed"` and a top-level `suppressionReason`, but only `applied` evidence contributes to the final `overallScore` and final classification.
+Final scoring currently applies deterministic interaction suppression (e.g. suppress OS3 if OS1; suppress OM2 if OVs1) before summing scores. Suppressed evidence remains visible in the internal summary with `status="suppressed"` and a top-level `suppressionReason`, but only `applied` evidence contributes to the final `overallScore` and final classification.
 
 The detailed rule specification for these pipelines and the final score layer lives in `docs/evidence-and-scoring.md`.
 
@@ -113,15 +88,10 @@ Client-facing prediction responses should surface any needed provenance through 
 - The larger source pool lives at `evaluation/variantLists/variantListMaster.csv`, uses the same mixed-detail schema, and preserves category-only source rows by marking them with `referenceDetailLevel = category_only`, leaving `points` plus `criteria` blank, and carrying the original free-text criteria note in `comments`.
 - The evaluation script builds the internal summary first, stores that exact `/summarizeEvidence`-style JSON as `evidenceSummary`, then derives the clinician-facing FHIR Observation and flattens that into one comparison row per input variant.
 - The flattened predictions are written to `evaluation/output/oncogenicityPredictions.csv` with `reference*` and `predicted*` columns plus `predictionUnavailable`.
-- Metrics are written to two separate CSVs: `evaluation/output/metrics-category-based.csv` for overall classification and score concordance, and `evaluation/output/metrics-score-based.csv` for exact criteria-set agreement and per-swimlane score agreement.
+- Metrics are written to two separate CSVs: `evaluation/output/metrics-category-based.csv` for overall classification concordance, and `evaluation/output/metrics-score-based.csv` for exact criteria-set agreement and per-swimlane score agreement.
 - Category-only rows still participate in classification concordance. Rows without reference scores are excluded from score concordance, and rows without reference criteria are excluded from criteria and swimlane concordance.
 - Rows with `predictionUnavailable = true` are excluded from concordance metrics and counted separately.
 
-## Reuse Plan From `llm-oncogenicity`
-
-- Likely reusable: batch processing, evaluator logic, data-source adapters, parsing helpers, fixtures
-- Likely to replace: LLM and RAG orchestration, older normalization flow, outdated MaveDB scoring assumptions, non-FHIR output surfaces
-- Migration strategy: treat the old repository as a source of reusable modules rather than as the base architecture for the new service
 
 ## Current Evaluation Structure
 
@@ -138,12 +108,6 @@ oncogenicity-predictor/
 │   └── runEvaluation.py
 ```
 
-## Near-Term Questions
-
-1. How strict should HGVS validation become before calling ClinGen?
-2. Which additional FHIR fields beyond the current Observation skeleton should be locked before more pipelines land?
-3. Which score output is authoritative for evaluation: numeric score, discrete class, or both?
-4. Which pieces of `llm-oncogenicity` are worth migrating first?
 
 ## NormalizedVariant Shape
 
@@ -161,7 +125,6 @@ The current internal normalization target is intentionally permissive.
 
 Notes:
 
-- `uniprot_id` is intentionally deferred and is not currently part of the normalization model.
 - The current implementation assumes successful normalization returns a `NormalizedVariant`; malformed or unnormalizable input returns an error instead.
 - Normalized genomic, transcript, and protein fields are populated only from NCBI RefSeq accessions: `NC_`, `NM_`, and `NP_`.
 - `representative_transcript_hgvs` is available as a practical fallback when MANE and canonical transcript fields are absent.
@@ -170,12 +133,10 @@ Notes:
 
 - `GET /annotateVariant` currently returns `AnnotatedVariant`.
 - `GET /annotateVariant` is the explicit annotation-oriented single-variant endpoint.
-- `GET /summarizeEvidence` currently returns `OncogenicityPredictionSummary` and is intended as an internal/debug endpoint.
+- `GET /summarizeEvidence` currently returns `OncogenicityPredictionSummary`.
 - Prediction endpoints currently return a single FHIR Observation-style object with `issued`, a custom extension carrying the submitted variant HGVS string, an overall score, a final classification, and only the score-contributing evidence components.
-- Batch prediction requests currently return an `observations` list of those prediction objects.
+- Batch prediction requests return a FHIR bundle with a list of FHIR observations, one per variant.
 - Prediction success/failure is currently expressed through the internal summary surface rather than by embedding the internal annotation result into the clinician-facing FHIR output.
 - FHIR rendering currently lives in `app/services/fhir/observation_builder.py` and is intentionally lightweight rather than profile-complete.
 
-Deferred manuscript caveats worth future implementation are currently documented in the evidence-and-scoring spec rather than automated. More broadly, v1 intentionally leaves many disease-specific, gene-specific, and expert-panel-specific caveats unimplemented in favor of a smaller reproducible automated core. The highest-value deferred items remain `OVS1` splice and 3' end nuance, splicing-aware suppression of protein-level criteria, hotspot caution for truncating-driven hotspots, functional evidence downgrading, hereditary predisposition population-threshold overrides, and other expert-panel exception logic.
-
-The object is only created on successful normalization. Failures are handled as errors rather than partial `NormalizedVariant` instances.
+Deferred caveats worth future implementation are currently documented in the evidence-and-scoring spec rather than automated. More broadly, v1 intentionally leaves many disease-specific, gene-specific, and expert-panel-specific caveats unimplemented in favor of a smaller reproducible automated core. The highest-value deferred items remain `OVS1` splice and 3' end nuance, splicing-aware suppression of protein-level criteria, hotspot caution for truncating-driven hotspots, functional evidence downgrading, hereditary predisposition population-threshold overrides, and other expert-panel exception logic.

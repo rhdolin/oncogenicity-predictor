@@ -76,7 +76,7 @@ Column notes:
 
 ### `evaluation/output/metrics-category-based.csv`
 
-This file summarizes overall classification and score concordance.
+This file summarizes overall classification concordance.
 
 Current contents include:
 

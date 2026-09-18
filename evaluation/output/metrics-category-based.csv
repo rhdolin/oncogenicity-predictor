@@ -1,8 +1,8 @@
 numInputRows,numPredictionUnavailable,numCategoryTested,numScoreTested,observedAgreement,weightedAgreementLinear,expectedWeightedLinear,weightedKappaLinear,weightedAgreementQuadratic,expectedWeightedQuadratic,weightedKappaQuadratic,adjacentDisagreements,extremeDisagreements,diagonalAgreement,exactScoreAgreement,exactScoreAgreementRate,scoreWithin2,scoreWithin2Rate,scoreGreaterThan2,scoreGreaterThan2Rate
-35,0,35,35,0.7142857142857143,0.8571428571428571,0.563265306122449,0.6728971962616821,0.9285714285714286,0.6795918367346939,0.7770700636942676,10,0,25,4,0.11428571428571428,18,0.5142857142857142,17,0.4857142857142857
+94,0,94,94,0.7127659574468085,0.8457446808510638,0.6441828881846989,0.5664758269720102,0.9122340425531915,0.7752942507922137,0.6094182825484765,25,2,67,14,0.14893617021276595,52,0.5531914893617021,42,0.44680851063829785
 
 Confusion Matrix (Reference -> Predicted)
 ,Predicted_Benign,Predicted_VUS,Predicted_Oncogenic
-Reference_Benign,8,0,0
-Reference_VUS,1,7,1
-Reference_Oncogenic,0,8,10
+Reference_Benign,10,1,0
+Reference_VUS,1,36,1
+Reference_Oncogenic,2,22,21

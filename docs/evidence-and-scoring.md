@@ -6,7 +6,7 @@ This document is the working specification for the oncogenicity evidence pipelin
 
 - The architecture document describes where evidence and scoring fit in the system.
 - This document defines the rule logic, data dependencies, and response semantics for each evidence pipeline.
-- The final client-facing prediction payload should not include `AnnotatedVariant` or `NormalizedVariant`.
+- The final client-facing prediction payload does not include `AnnotatedVariant` or `NormalizedVariant` objects.
 
 ## Current State Summary
 
@@ -27,7 +27,7 @@ Current overall scoring applies a small deterministic interaction-resolution ste
 - shared evidence result shape and semantics
 - rule order and availability behavior for each implemented pipeline
 - current data sources and matching strategies
-- current implemented pipelines plus remaining planned v1 additions
+- current implemented pipelines
 - current overall score aggregation and prediction rendering
 
 ## Shared Evidence Result Shape
@@ -149,7 +149,6 @@ The current annotation step populates:
 
 - `computationalAnnotation.cadd.phred`
 - `computationalAnnotation.cadd.raw`
-- `computationalAnnotation.phyloP100wayVertebrate`
 - `computationalAnnotation.fathmmXfCoding.prediction`
 - `computationalAnnotation.fathmmXfCoding.score`
 - `computationalAnnotation.fathmmXfCoding.rankscore`
@@ -193,7 +192,7 @@ The hotspots pipeline evaluates the bundled Cancer Hotspots workbook against tra
 ### Current Data Source
 
 - local workbook: `data/hotspots_v2.xlsx`
-- source provenance: Cancer Hotspots
+- source provenance: [Cancer Hotspots](https://www.cancerhotspots.org/#/home)
 
 ### Current Data Access Strategy
 
@@ -262,7 +261,7 @@ Most genes resolve directly from `data/_Dict_Gene.csv` as oncogene, tumor suppre
 - `OVS1`, score `8`: null variant in a resolved tumor suppressor gene context
 - `OS1`, score `4`: same amino acid change as a previously established somatic oncogenic ClinVar variant
 - `OM2`, score `2`: in-frame insertion or deletion in a resolved oncogene or tumor suppressor gene context, or `stop_lost` in a resolved tumor suppressor gene context
-- `SBP2`, score `-1`: synonymous variant with `phyloP100wayVertebrate < 2.0`
+- `SBP2`, score `-1`: synonymous variant with `phyloP100wayVertebrate < 2.0` (conservation score)
 - `OM4`, score `2`: missense variant at an amino-acid residue where a different missense variant is established as somatic oncogenic in ClinVar
 
 ### Current ClinVar Match Policy
@@ -284,7 +283,7 @@ Most genes resolve directly from `data/_Dict_Gene.csv` as oncogene, tumor suppre
 
 ### Purpose
 
-The functional pipeline uses locally retained ClinMAVE per-gene CSV exports to map curated functional assay results into `OS2`, `SBS2`, or a neutral score of `0`.
+The functional pipeline uses locally retained [ClinMAVE](https://ngdc.cncb.ac.cn/clinmave/) per-gene CSV exports to map curated functional assay results into `OS2`, `SBS2`, or a neutral score of `0`.
 
 ### Current Upstream Inputs
 
@@ -410,11 +409,11 @@ The OM1 pipeline evaluates whether a localized protein-altering variant falls wi
 
 ## OP2 Pipeline
 
-`OP2` is now implemented as a small curated tumor-type-aware evidence block.
+`OP2` is implemented as a small curated tumor-type-aware evidence block.
 
 ### Current Rule Basis
 
-The manuscript describes `OP2` as:
+`OP2` criterion:
 
 - somatic variant in a gene in a malignancy with a single genetic etiology
 
@@ -498,9 +497,7 @@ Current score-to-classification mapping is:
 
 ## Current Deferred Caveats
 
-The manuscript's explicit exclusion rules above are implemented. Other comments and caveats from Tables 2 and 3 are currently documented as future refinement areas rather than automated logic.
-
-More broadly, the current v1 implementation intentionally does not attempt to encode the full set of disease-specific, gene-specific, and expert-panel-specific caveats that appear across published interpretation frameworks. That includes population-threshold overrides, assay-strength downgrades, transcript and splicing caveats, domain-specific exceptions, and other special-case logic that often depends on narrow curation context. The current implementation therefore follows a smaller automated core rule set and will sometimes disagree with manually curated pipelines even when the high-level rule names appear aligned.
+The current v1 implementation intentionally does not attempt to encode the full set of disease-specific, gene-specific, and expert-panel-specific caveats that appear across published interpretation frameworks. That includes population-threshold overrides, assay-strength downgrades, transcript and splicing caveats, domain-specific exceptions, and other special-case logic that often depends on narrow curation context. The current implementation therefore follows a smaller automated core rule set and will sometimes disagree with manually curated pipelines even when the high-level rule names appear aligned.
 
 The highest-priority deferred caveats are:
 
@@ -541,7 +538,7 @@ Current serialization behavior:
 - prediction endpoints omit `null` fields from the JSON response
 - defaulted fields such as `resourceType="Observation"` and `status="final"` are still emitted
 
-The final client-facing result should not embed `AnnotatedVariant` or `NormalizedVariant`. Any normalization or annotation provenance needed by the client should be surfaced through the evidence output itself, primarily through fields such as:
+The final client-facing result does not embed `AnnotatedVariant` or `NormalizedVariant`. Any normalization or annotation provenance needed by the client should be surfaced through the evidence output itself, primarily through fields such as:
 
 - `source`
 - `matchedData`
@@ -552,270 +549,3 @@ The final client-facing result should not embed `AnnotatedVariant` or `Normalize
 - some evidence policies remain intentionally narrow, especially exact-match functional lookups and the small curated OP2 rule table
 - many disease-specific, gene-specific, and expert-panel-specific caveats remain documented limitations rather than automated logic
 - generic thresholds and rule mappings are still used in places where mature frameworks apply narrower population, transcript, domain, or assay-specific exceptions
-
-In the current REST response shape, the FATHMM-family fields exposed for this implementation are the `FATHMM-XF` dbNSFP keys with hyphenated names such as `fathmm-xf_coding_pred`.
-Although those field names are the ones we read from the response, the current Ensembl REST service returned `invalid_field` when they were requested explicitly, so the implementation uses `dbNSFP=ALL` and then extracts the needed keys from the response.
-
-### Current Intended Rule Basis
-
-- `OP1` is used as a positive supporting rule when `CADD PHRED >= 15`
-- `SBP1` is used as a benign supporting rule when both of the following are true:
-- `mostSevereConsequence == "missense_variant"`
-- `CADD PHRED < 15`
-- `FATHMM-XF` prediction is benign or neutral
-
-Low `CADD` alone does not trigger `SBP1`. If `CADD` is low but the `FATHMM-XF` call is missing or not benign/neutral, the pipeline returns a score of `0` with no evidence code. Non-missense variants can still receive `OP1` if `CADD` is high enough, but they are not eligible for the current `SBP1` benign rule.
-
-### Initial Rule Mapping
-
-- If annotation failed or computational inputs are unavailable, return `not_available` with score `0`
-- If `CADD PHRED >= 15`, return `OP1` with score `1`
-- Else if `mostSevereConsequence == "missense_variant"` and `FATHMM-XF` is benign or neutral, return `SBP1` with score `-1`
-- Else if `mostSevereConsequence` is not `missense_variant`, return score `0` with no evidence code
-- Else return score `0` with no evidence code
-
-### Draft Decision Logic
-
-```text
-if annotation failed:
-    not_available
-elif cadd_phred is missing:
-    not_available
-elif cadd_phred >= 15:
-    score = 1
-    evidenceCode = "OP1"
-elif most_severe_consequence == "missense_variant" and fathmm_xf_prediction in {"N", "neutral", "benign", "tolerated"}:
-    score = -1
-    evidenceCode = "SBP1"
-elif most_severe_consequence != "missense_variant":
-  score = 0
-  evidenceCode = null
-else:
-    score = 0
-    evidenceCode = null
-```
-
-### Draft Evidence Statements
-
-For `OP1`:
-
-```json
-{
-  "score": 1,
-  "evidenceCode": "OP1",
-  "evidenceStatement": "CADD supports oncogenicity for this variant (PHRED 25.3; most severe consequence missense_variant).",
-  "status": "applied",
-  "source": "vep",
-  "matchedData": {
-    "mostSevereConsequence": "missense_variant",
-    "caddPhred": 25.3,
-    "caddRaw": 4.12,
-    "phyloP100wayVertebrate": 7.89,
-    "fathmmXfCodingPrediction": "D",
-    "fathmmXfCodingScore": 0.88,
-    "fathmmXfCodingRankscore": 0.91
-  }
-}
-```
-
-For `SBP1`:
-
-```json
-{
-  "score": -1,
-  "evidenceCode": "SBP1",
-  "evidenceStatement": "Concordant computational predictors support a benign effect for this missense variant (CADD PHRED 10.4; FATHMM-XF N).",
-  "status": "applied",
-  "source": "vep",
-  "matchedData": {
-    "mostSevereConsequence": "missense_variant",
-    "caddPhred": 10.4,
-    "caddRaw": 0.42,
-    "phyloP100wayVertebrate": 7.89,
-    "fathmmXfCodingPrediction": "N",
-    "fathmmXfCodingScore": 0.12,
-    "fathmmXfCodingRankscore": 0.08
-  }
-}
-```
-
-For an evaluated missense variant with no current computational code trigger:
-
-```json
-{
-  "score": 0,
-  "evidenceCode": null,
-  "evidenceStatement": "Computational evidence did not meet current scoring criteria.",
-  "status": "applied",
-  "source": "vep"
-}
-```
-
-For a non-missense variant:
-
-```json
-{
-  "score": 0,
-  "evidenceCode": null,
-  "evidenceStatement": "Computational missense benign rules were not applicable because the most severe consequence was synonymous_variant.",
-  "status": "applied",
-  "source": "vep"
-}
-```
-
-## Hotspots Pipeline
-
-Planned source: the local workbook at `data/hotspots_v2.xlsx`, copied from Cancer Hotspots: https://www.cancerhotspots.org/#/home
-
-Current implementation:
-
-- the workbook is loaded into an in-memory cache on first use rather than being reopened for each variant
-- transcript consequences are evaluated in order, and the first defensible hotspot match is used
-- matching is gene-centric because the workbook is not transcript-indexed
-- SNVs require exact match on gene, amino-acid position, reference amino acid, and alternate amino acid
-- indels are supported only for direct matches that can be justified from the workbook's native event representation, with no additional indel normalization layer
-- thresholds follow the legacy implementation:
-- `OS3`: `mutation_count >= 50` and exact protein-event count `>= 10`
-- `OM3`: exact protein-event count `>= 10`
-- `OP3`: exact protein-event count `1..9`
-
-## Predictive Pipeline
-
-The predictive pipeline is currently implemented and combines deterministic consequence-based logic with ClinVar somatic oncogenicity lookups.
-
-Current rule order:
-
-- `OVS1`
-- `OS1`
-- `OM2`
-- `SBP2`
-- `OM4`
-- else score `0` with `applied`
-
-Current source behavior:
-
-- consequence-driven rules use normalized and annotated variant state
-- role-sensitive consequence rules use optional `tumorType` to resolve dual-role genes such as `GATA3`; without a resolved role, `OVS1` is not applied
-- ClinVar lookup uses E-utilities search plus summary retrieval
-- ClinVar `[varnam]` matching is treated as non-exact, so local alias confirmation is required before applying `OS1` or `OM4`
-
-## Functional Pipeline
-
-### Purpose
-
-The functional pipeline uses locally retained ClinMAVE per-gene CSV exports to map curated functional assay results into `OS2`, `SBS2`, or a neutral score of `0`.
-
-### Current Upstream Inputs
-
-The current implementation depends on:
-
-- `normalizedVariant.geneSymbol`
-- `normalizedVariant.transcript_hgvs.mane_select_b38`
-- optional `tumorType` request input on evidence and prediction endpoints
-- local ClinMAVE files under `data/clinmave/variants.<GENE>.csv`
-- local gene-role metadata in `data/_Dict_Gene.csv`
-
-ClinMAVE `Identifier` values are normalized from forms like:
-
-- `NM_000051.4(ATM):c.283C>T (p.Gln95Ter)`
-
-to transcript HGVS strings like:
-
-- `NM_000051.4:c.283C>T`
-
-The pipeline then performs exact equality matching against `mane_select_b38`.
-
-### Current Match Policy
-
-- Primary and only v1 match key: `normalizedVariant.transcript_hgvs.mane_select_b38`
-- Match requires exact string equality after ClinMAVE `Identifier` normalization
-- No fallback to alternate transcript, protein, or genomic matching in v1
-- If the queried gene is not present in the retained ClinMAVE panel, return `not_available`
-- If the gene is present but the variant is not found, return `not_available`
-
-### Current Functional Classification Mapping
-
-Observed ClinMAVE functional classes in the retained dataset are:
-
-- `Functionally normal`
-- `Gain-of-function`
-- `Loss-of-function`
-
-They are interpreted as:
-
-- `Functionally normal` -> normal
-- `Gain-of-function` -> GOF
-- `Loss-of-function` -> LOF
-
-### Current Gene Role Policy
-
-Most retained genes resolve directly to `oncogene` or `tsg` using `data/_Dict_Gene.csv`.
-
-`GATA3` is currently treated as a dual-role gene and requires `tumorType` to resolve role:
-
-- Oncogene contexts: `Peripheral T-Cell Lymphoma`, `T-Cell Acute Lymphoblastic Leukemia`, `Hodgkin Lymphoma`, `Neuroblastoma`, `T-Cell Lymphoblastic Lymphoma`
-- Tumor suppressor contexts: `Breast Cancer`, `Urothelial Carcinoma`, `Bladder Carcinoma`, `Renal Cell Carcinoma`, `Parathyroid Carcinoma`
-- Any other tumor type: no functional rule is applied and the result is `not_available`
-
-### Current Rule Mapping
-
-- oncogene + `Gain-of-function` -> `OS2`, score `4`
-- tumor suppressor gene + `Loss-of-function` -> `OS2`, score `4`
-- oncogene + `Functionally normal` -> `SBS2`, score `-4`
-- tumor suppressor gene + `Functionally normal` -> `SBS2`, score `-4`
-- oncogene + `Loss-of-function` -> score `0`, `applied`
-- tumor suppressor gene + `Gain-of-function` -> score `0`, `applied`
-- conflicting ClinMAVE classifications for the same exact matched transcript HGVS -> score `0`, `applied`
-
-### Current Availability Semantics
-
-- `applied` when a ClinMAVE row is found and evaluated, including neutral score `0` outcomes
-- `applied` when exact-match ClinMAVE rows are found but contain conflicting functional classifications, in which case the statement explains that no functional rule is applied
-- `not_available` when the gene is not in the retained ClinMAVE panel
-- `not_available` when the gene is supported but the variant is not found
-- `not_available` when tumor-type context is required but missing or unresolved
-
-### Current Data Access Strategy
-
-- ClinMAVE gene CSVs are loaded lazily, one gene at a time, on first use
-- Parsed rows are cached in memory for the life of the process
-- The pipeline does not preload all retained ClinMAVE files at startup
-
-## Final Score Aggregation
-
-The current API rendering for prediction endpoints is a single FHIR Observation-style object per variant.
-
-Current rendering intent:
-
-- `Observation.code`: temporary code for oncogenicity prediction
-- `Observation.issued`: timestamp when the service generated the prediction
-- `Observation.extension`: custom extension carrying the originally submitted variant string in `valueString`
-- `Observation.valueInteger`: overall numeric score
-- `Observation.interpretation`: overall classification when available
-- one `Observation.component` per evidence pipeline
-- `component.code`: temporary code identifying the pipeline
-- `component.valueInteger`: pipeline score when the pipeline is available
-- `component.interpretation.coding.code`: pipeline evidence code such as `OP4`, `SBS1`, or `SBVS1`
-- `component.interpretation.text`: short clinician-facing evidence statement
-- `component.dataAbsentReason`: present instead of `component.valueInteger` when a pipeline is unavailable
-
-Current serialization note:
-
-- prediction endpoints omit `null` fields from the JSON response
-- defaulted fields such as `resourceType="Observation"` and `status="final"` are still emitted
-
-The final client-facing result should not embed `AnnotatedVariant` or `NormalizedVariant`.
-
-Any normalization or annotation provenance that is needed by the client should be surfaced through the evidence output itself, primarily through fields such as:
-
-- `source`
-- `matchedData`
-- `evidenceStatement`
-
-If additional provenance is needed later, it should be added to the evidence result shape rather than by embedding internal intermediate objects into the final client-facing payload.
-
-The exact aggregation rules are not yet locked in this document.
-
-## Worked Examples
-
-Placeholder. Add worked examples here drawn from current population and computational test fixtures, then expand them as additional pipelines land.
