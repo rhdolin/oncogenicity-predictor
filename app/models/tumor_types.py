@@ -8,6 +8,7 @@ TumorType = Literal[
     "Hairy Cell Leukemia",
     "Hodgkin Lymphoma",
     "Neuroblastoma",
+    "Non-Small Cell Lung Cancer",
     "Parathyroid Carcinoma",
     "Peripheral T-Cell Lymphoma",
     "Retinoblastoma",
