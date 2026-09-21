@@ -33,6 +33,9 @@ PROTOTYPE_DISCLAIMER = (
     "This algorithm is not fit for actual clinical use and must not be used "
     "for patient care or clinical decision-making."
 )
+OBSERVATION_METHOD_TEXT = (
+    "OncogenicityPredictor v1 (https://github.com/rhdolin/oncogenicity-predictor)"
+)
 
 
 def _build_concept(
@@ -131,6 +134,7 @@ def build_oncogenicity_observation(
             display="Oncogenicity prediction",
             text="Oncogenicity prediction",
         ),
+        method=_build_concept(text=OBSERVATION_METHOD_TEXT),
         valueInteger=summary.overallScore,
         interpretation=interpretation,
         extension=[

@@ -221,6 +221,10 @@ def test_predict_single_returns_observation() -> None:
     assert body["issued"].endswith("Z")
     datetime.fromisoformat(body["issued"].replace("Z", "+00:00"))
     assert body["code"]["coding"][0]["code"] == "oncogenicity-prediction"
+    assert body["method"] == {
+        "coding": [],
+        "text": "OncogenicityPredictor v1 (https://github.com/rhdolin/oncogenicity-predictor)",
+    }
     assert body["valueInteger"] == 2
     assert body["interpretation"][0]["coding"][0]["code"] == "VUS"
     assert body["extension"] == [

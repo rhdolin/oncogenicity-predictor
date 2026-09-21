@@ -67,6 +67,7 @@ class OncogenicityObservation(BaseModel):
     status: Literal["final"] = "final"
     issued: str
     code: CodeableConcept
+    method: CodeableConcept | None = None
     valueInteger: int | None = None
     interpretation: list[CodeableConcept] = Field(default_factory=list)
     dataAbsentReason: CodeableConcept | None = None
