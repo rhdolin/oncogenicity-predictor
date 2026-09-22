@@ -93,6 +93,29 @@ Current contents include:
 
 Category-only reference rows remain part of the classification confusion matrix and agreement statistics. They are excluded only from the score-specific calculations.
 
+Field definitions:
+
+- `numInputRows`: total number of input rows processed by the evaluator
+- `numPredictionUnavailable`: number of rows where no final prediction was returned and the row was excluded from concordance metrics
+- `numCategoryTested`: number of rows included in category-based comparison
+- `numScoreTested`: number of rows included in score-based comparison
+- `observedAgreement`: exact category agreement rate, computed as `diagonalAgreement / numCategoryTested`
+- `weightedAgreementLinear`: ordinal agreement with partial credit for adjacent disagreements, computed as `(diagonalAgreement + 0.5 * adjacentDisagreements) / numCategoryTested`
+- `expectedWeightedLinear`: chance-expected ordinal agreement using the same linear weighting scheme
+- `weightedKappaLinear`: chance-corrected ordinal agreement using linear weights, computed as `(weightedAgreementLinear - expectedWeightedLinear) / (1 - expectedWeightedLinear)`
+- `weightedAgreementQuadratic`: ordinal agreement with stronger partial credit for near-misses, computed as `(diagonalAgreement + 0.75 * adjacentDisagreements) / numCategoryTested`
+- `expectedWeightedQuadratic`: chance-expected ordinal agreement using quadratic-style weights
+- `weightedKappaQuadratic`: chance-corrected ordinal agreement using quadratic-style weights, computed as `(weightedAgreementQuadratic - expectedWeightedQuadratic) / (1 - expectedWeightedQuadratic)`
+- `adjacentDisagreements`: count of benign-to-VUS, VUS-to-benign, VUS-to-oncogenic, and oncogenic-to-VUS disagreements in the collapsed 3x3 matrix
+- `extremeDisagreements`: count of benign-to-oncogenic and oncogenic-to-benign disagreements in the collapsed 3x3 matrix
+- `diagonalAgreement`: count of exact matches in the collapsed 3x3 matrix
+- `exactScoreAgreement`: count of rows where the final numeric score exactly matched the reference score
+- `exactScoreAgreementRate`: `exactScoreAgreement / numScoreTested`
+- `scoreWithin2`: count of rows where the predicted overall score was within 2 points of the reference score
+- `scoreWithin2Rate`: `scoreWithin2 / numScoreTested`
+- `scoreGreaterThan2`: count of rows where the predicted overall score differed from the reference score by more than 2 points
+- `scoreGreaterThan2Rate`: `scoreGreaterThan2 / numScoreTested`
+
 ### `evaluation/output/metrics-score-based.csv`
 
 This file summarizes criteria and swimlane agreement.
@@ -108,6 +131,30 @@ Current contents include:
 Per-swimlane rows report exact agreement, agreement within 2 points, larger deviations, and weighted agreement measures.
 
 Rows without reference criteria are excluded from this file.
+
+Field definitions:
+
+- `numInputRows`: total number of input rows processed by the evaluator
+- `numPredictionUnavailable`: number of rows where no final prediction was returned and the row was excluded from concordance metrics
+- `numCriteriaTested`: number of rows with usable reference criteria and predicted criteria for score-based evaluation
+- `exactCriteriaSetMatches`: number of rows where the full predicted criteria set exactly matched the reference criteria set
+- `exactCriteriaSetAgreementRate`: `exactCriteriaSetMatches / numCriteriaTested`
+
+Per-swimlane row definitions:
+
+- `numTested`: number of rows included in comparison for that swimlane section
+- `numCriteriaTested`: repeated total number of rows with usable criteria for convenience in each swimlane row
+- `swimlane`: swimlane name being scored, currently one of `population`, `computational`, `hotspots`, `predictive`, `om1`, `op2`, or `functional`
+- `same`: number of rows where the predicted swimlane score exactly matched the reference swimlane score
+- `within2`: number of rows where the predicted swimlane score was within 2 points of the reference swimlane score
+- `greaterThan2`: number of rows where the predicted swimlane score differed from the reference swimlane score by more than 2 points
+- `sumCheck`: `same + within2 + greaterThan2`; used as a consistency check against `numTested`
+- `exactAgreementRate`: `same / numTested`
+- `acceptableAgreementRate`: `(same + within2) / numTested`
+- `largeDeviationRate`: `greaterThan2 / numTested`
+- `weightedScoreLinear`: `(same + 0.5 * within2) / numTested`
+- `fuzzinessRatio`: `within2 / (same + within2)`; measures how much acceptable agreement depends on tolerance rather than exact matches
+- `failureToExactRatio`: `greaterThan2 / same`; measures how often large failures occur relative to exact matches
 
 ## Unavailable Predictions
 

@@ -6447,7 +6447,7 @@ NC_000005.10:g.87378501C>G,RASA1,https://www.medrxiv.org/content/10.1101/2024.10
 NC_000005.10:g.87380549C>T,RASA1,https://www.medrxiv.org/content/10.1101/2024.10.10.24315072v1.full (OncoVI algorithm),Oncogenic,12,"[""OVS1"", ""OM1"", ""OP1"", ""OP4""]",full,
 NC_000005.10:g.87389474G>A,RASA1,https://www.medrxiv.org/content/10.1101/2024.10.10.24315072v1.full (OncoVI algorithm),VUS,2,"[""OP1"", ""OP4""]",full,
 NC_000013.10:g.48923160G>A,RB1,https://pmc.ncbi.nlm.nih.gov/articles/PMC9081216/,Likely Oncogenic,6,"[""OVS1"", ""OP1"", ""OP4""]",full,
-NC_000013.10:g.48951025A>G,RB1,https://pmc.ncbi.nlm.nih.gov/articles/PMC9081216/,Likely Oncogenic,-8,"[""SBVS1""]",full,
+NC_000013.10:g.48951025A>G,RB1,https://pmc.ncbi.nlm.nih.gov/articles/PMC9081216/,Benign,-8,"[""SBVS1""]",full,
 NC_000013.10:g.49037976G>T,RB1,https://pmc.ncbi.nlm.nih.gov/articles/PMC9081216/,Likely Oncogenic,6,"[""OVS1"", ""OP1"", ""OP4""]",full,OVS1 downgraded to Strong
 NC_000013.11:g.48303946_48303986del,RB1,ClinVar,Likely oncogenic,,,category_only,"criteria provided, single submitter"
 NC_000013.11:g.48307284G>T,RB1,ClinVar,Likely oncogenic,,,category_only,"criteria provided, single submitter"

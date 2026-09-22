@@ -1,0 +1,8 @@
+numInputRows,numPredictionUnavailable,numCategoryTested,numScoreTested,observedAgreement,weightedAgreementLinear,expectedWeightedLinear,weightedKappaLinear,weightedAgreementQuadratic,expectedWeightedQuadratic,weightedKappaQuadratic,adjacentDisagreements,extremeDisagreements,diagonalAgreement,exactScoreAgreement,exactScoreAgreementRate,scoreWithin2,scoreWithin2Rate,scoreGreaterThan2,scoreGreaterThan2Rate
+316,20,296,0,0.8817567567567568,0.9358108108108109,0.8243813915266618,0.6344966530187823,0.9628378378378378,0.8925938184806428,0.6540035067212157,32,3,261,0,0.0,0,0.0,0,0.0
+
+Confusion Matrix (Reference -> Predicted)
+,Predicted_Benign,Predicted_VUS,Predicted_Oncogenic
+Reference_Benign,3,1,0
+Reference_VUS,4,32,5
+Reference_Oncogenic,3,22,226
