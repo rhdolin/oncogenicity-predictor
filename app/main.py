@@ -25,6 +25,20 @@ app = FastAPI(
         "request."
     ),
     version="0.1.0",
+    openapi_tags=[
+        {
+            "name": "Public Interfaces",
+            "description": "External prediction endpoints intended for public use.",
+        },
+        {
+            "name": "Internal Interfaces",
+            "description": "Internal and debugging endpoints that expose non-FHIR payloads.",
+        },
+        {
+            "name": "Service",
+            "description": "Lightweight service metadata and health endpoints.",
+        },
+    ],
 )
 
 app.include_router(api_router)
@@ -32,6 +46,7 @@ app.include_router(api_router)
 
 @app.get(
     "/",
+    tags=["Service"],
     summary="Service overview",
     description="Returns a minimal status payload with a link to the interactive API docs.",
 )
@@ -46,6 +61,7 @@ def root() -> dict:
 
 @app.get(
     "/health",
+    tags=["Service"],
     summary="Health check",
     description="Returns a lightweight readiness response for uptime checks and Render health probes.",
 )

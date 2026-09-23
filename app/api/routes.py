@@ -14,7 +14,7 @@ from app.models.prediction import (
     OncogenicityPredictionSummary,
 )
 from app.models.requests import BatchRequest
-from app.models.tumor_types import TUMOR_TYPE_VALUES, TumorType
+from app.models.tumor_types import TumorType
 from app.services.fhir import build_oncogenicity_observation_bundle
 from app.services.normalization.variant_normalizer import VariantNormalizationError
 from app.services.orchestration.single_variant_pipeline import (
@@ -62,6 +62,7 @@ def _summarize_variant_or_raise(
 
 @router.get(
     "/predictOncogenicity",
+    tags=["Public Interfaces"],
     response_model=OncogenicityObservation,
     response_model_exclude_none=True,
     summary="Predict oncogenicity for a single variant",
@@ -80,12 +81,12 @@ def _summarize_variant_or_raise(
 def predict_single(
     variant: str = Query(
         description="Variant for which to predict oncogenicity. Must be provided in HGVS format.",
-        examples=["NM_004119.3:c.2073T>G"],
+        example="NM_001002295.2:c.3G>A",
     ),
     tumorType: TumorType | None = Query(
         default=None,
         description="Optional tumor type used for context-dependent evidence rules.",
-        examples=list(TUMOR_TYPE_VALUES),
+        example="Non-Small Cell Lung Cancer",
     ),
 ) -> OncogenicityObservation:
     """Handle GET requests for a single clinician-facing FHIR prediction."""
@@ -94,6 +95,7 @@ def predict_single(
 
 @router.get(
     "/annotateVariant",
+    tags=["Internal Interfaces"],
     response_model=AnnotatedVariant,
     summary="Annotate a single variant",
     description=(
@@ -107,7 +109,7 @@ def predict_single(
 def annotate_single(
     variant: str = Query(
         description="Variant to annotate. Must be provided in HGVS format.",
-        examples=["NM_004119.3:c.2073T>G"],
+        example="NM_001002295.2:c.3G>A",
     ),
 ) -> AnnotatedVariant:
     """Handle GET requests for the internal annotation payload."""
@@ -116,6 +118,7 @@ def annotate_single(
 
 @router.get(
     "/summarizeEvidence",
+    tags=["Internal Interfaces"],
     response_model=OncogenicityPredictionSummary,
     summary="Summarize evidence for a single variant",
     description=(
@@ -131,12 +134,12 @@ def annotate_single(
 def summarize_single(
     variant: str = Query(
         description="Variant to summarize. Must be provided in HGVS format.",
-        examples=["NM_004119.3:c.2073T>G"],
+        example="NM_001002295.2:c.3G>A",
     ),
     tumorType: TumorType | None = Query(
         default=None,
         description="Optional tumor type used for context-dependent evidence rules.",
-        examples=list(TUMOR_TYPE_VALUES),
+        example="Non-Small Cell Lung Cancer",
     ),
 ) -> OncogenicityPredictionSummary:
     """Handle GET requests for the raw evidence summary before FHIR mapping."""
@@ -145,6 +148,7 @@ def summarize_single(
 
 @router.post(
     "/predictOncogenicity",
+    tags=["Public Interfaces"],
     response_model=OncogenicityObservationBundle,
     response_model_exclude_none=True,
     summary="Predict oncogenicity for a batch of variants",
