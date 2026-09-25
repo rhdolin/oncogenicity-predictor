@@ -22,7 +22,9 @@ app = FastAPI(
         "also support an optional tumorType input for context-dependent rules. "
         "When VEP annotation fails, the prediction endpoints still return partial observations with "
         "component-level data absent reasons instead of failing the whole "
-        "request."
+        "request.\n\n"
+        "Click [here](https://github.com/rhdolin/oncogenicity-predictor) to see the github repo. "
+        "Contact [info@Elimu.io](mailto:info@Elimu.io) for comments on this work."
     ),
     version="0.1.0",
     openapi_tags=[
