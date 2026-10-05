@@ -2769,10 +2769,10 @@ def test_predict_batch_returns_mixed_success_and_failed_annotation_payloads() ->
 
     assert response.status_code == 200
     body = response.json()
-    first_population = _component_by_code(body["observations"][0], "population-evidence")
+    first_population = _component_by_code(body["entry"][0]["resource"], "population-evidence")
     assert first_population["valueInteger"] == 1
-    assert body["observations"][1]["dataAbsentReason"]["coding"][0]["code"] == "error"
-    assert body["observations"][1]["component"] == []
+    assert body["entry"][1]["resource"]["dataAbsentReason"]["coding"][0]["code"] == "error"
+    assert body["entry"][1]["resource"]["component"] == []
 
 
 def test_predict_single_returns_op4_when_population_data_is_missing() -> None:
