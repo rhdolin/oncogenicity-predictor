@@ -19,6 +19,7 @@ from app.services.scoring import apply_evidence_interaction_rules
 
 
 REAL_FETCH_VEP_ANNOTATION_RECORD = variant_annotator.fetch_vep_annotation_record
+REAL_PACE_NCBI_VARIATION_REQUEST = variant_normalizer._pace_ncbi_variation_request
 
 
 FAKE_HOTSPOT_INDEX = hotspots.HotspotIndex(
@@ -191,6 +192,7 @@ def stub_clingen_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
         "fetch_vep_annotation_record",
         lambda normalized_variant: VEP_SAMPLE_RECORD,
     )
+    monkeypatch.setattr(variant_normalizer, "_pace_ncbi_variation_request", lambda: None)
     monkeypatch.setattr(hotspots, "_get_hotspot_index", lambda: EMPTY_HOTSPOT_INDEX)
     monkeypatch.setattr(predictive, "search_clinvar_variation_ids", lambda query, retmax=100: [])
     monkeypatch.setattr(predictive, "fetch_clinvar_summaries", lambda variation_ids: {})
@@ -1423,7 +1425,7 @@ def test_functional_conflicting_clinmave_rows_return_applied_zero(
 def test_predict_batch_returns_bundle() -> None:
     response = client.post(
         "/predictOncogenicity",
-        json={"variants": ["NM_004119.3:c.2073T>G", "ENST00000241453.12:c.2073T>G"]},
+        json={"variants": ["NM_004119.3:c.2073T>G", "NC_000013.11:g.28027222A>C"]},
     )
 
     assert response.status_code == 200
@@ -1435,6 +1437,145 @@ def test_predict_batch_returns_bundle() -> None:
     assert body["entry"][0]["resource"]["resourceType"] == "Observation"
     assert body["entry"][0]["resource"]["valueInteger"] == 2
     assert body["entry"][1]["resource"]["valueInteger"] == 2
+
+
+def _stub_ncbi_spdi_translation(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    payload: dict,
+) -> list[str]:
+    requested_urls: list[str] = []
+
+    def fake_get(url: str, timeout: float) -> httpx.Response:
+        requested_urls.append(url)
+        return httpx.Response(status_code, request=httpx.Request("GET", url), json=payload)
+
+    monkeypatch.setattr(variant_normalizer.httpx, "get", fake_get)
+    return requested_urls
+
+
+def test_spdi_variant_is_translated_to_hgvs_before_clingen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls = _stub_ncbi_spdi_translation(
+        monkeypatch,
+        200,
+        {"data": {"hgvs": "NC_000013.11:g.28027222A>C"}},
+    )
+    clingen_queries: list[str] = []
+
+    def fake_fetch_allele_registry_record(queried_variant: str) -> dict:
+        clingen_queries.append(queried_variant)
+        return CLINGEN_SAMPLE_RECORD
+
+    monkeypatch.setattr(
+        variant_normalizer,
+        "fetch_allele_registry_record",
+        fake_fetch_allele_registry_record,
+    )
+
+    response = client.get(
+        "/annotateVariant",
+        params={"variant": "NC_000013.11:28027221:A:C"},
+    )
+
+    assert response.status_code == 200
+    assert requested_urls == [
+        "https://api.ncbi.nlm.nih.gov/variation/v0/spdi/NC_000013.11:28027221:A:C/hgvs"
+    ]
+    assert clingen_queries == ["NC_000013.11:g.28027222A>C"]
+    normalized_variant = response.json()["normalizedVariant"]
+    assert normalized_variant["submitted_variant"] == "NC_000013.11:28027221:A:C"
+    assert normalized_variant["normalization"]["queried_variant"] == "NC_000013.11:g.28027222A>C"
+
+
+def test_predict_single_keeps_submitted_spdi_in_fhir_extension(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_ncbi_spdi_translation(
+        monkeypatch,
+        200,
+        {"data": {"hgvs": "NM_004119.3:c.2073T>G"}},
+    )
+
+    response = client.get(
+        "/predictOncogenicity",
+        params={"variant": "NM_004119.3:2138:T:G"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["extension"] == [
+        {
+            "url": "https://oncogenicity-predictor.example/fhir/StructureDefinition/submitted-variant",
+            "valueString": "NM_004119.3:2138:T:G",
+        }
+    ]
+
+
+def test_spdi_translation_error_returns_400_with_ncbi_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_ncbi_spdi_translation(
+        monkeypatch,
+        422,
+        {
+            "error": {
+                "code": 422,
+                "message": "The reference sequence for 'NC_000013.11' at position '28027221' ('A'), "
+                "is not equal to variant's asserted reference ('G')",
+            }
+        },
+    )
+
+    response = client.get(
+        "/predictOncogenicity",
+        params={"variant": "NC_000013.11:28027221:G:C"},
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail.startswith("NCBI SPDI to HGVS translation failed for 'NC_000013.11:28027221:G:C'.")
+    assert "is not equal to variant's asserted reference ('G')" in detail
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "NP_004110.2:p.Phe691Leu",
+        "ENST00000241453.12:c.2073T>G",
+        "NG_007066.1:g.5000A>C",
+        "NP_004110.2:690:F:L",
+    ],
+)
+def test_unsupported_reference_sequence_returns_400(variant: str) -> None:
+    response = client.get("/predictOncogenicity", params={"variant": variant})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        f"Unsupported reference sequence in '{variant}'. "
+        "Variants must use an NCBI chromosome (NC_) or transcript (NM_) reference sequence."
+    )
+
+
+def test_ncbi_variation_requests_are_paced_to_one_per_second(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = {"now": 100.0}
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock["now"] += seconds
+
+    monkeypatch.setattr(variant_normalizer.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(variant_normalizer.time, "sleep", fake_sleep)
+    monkeypatch.setattr(variant_normalizer, "_last_ncbi_variation_request_started_at", 0.0)
+
+    REAL_PACE_NCBI_VARIATION_REQUEST()
+    clock["now"] += 0.25
+    REAL_PACE_NCBI_VARIATION_REQUEST()
+
+    assert sleeps == [pytest.approx(0.75)]
 
 
 def test_predictive_os1_matches_exact_protein_alias(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2602,7 +2743,7 @@ def test_annotate_single_returns_failed_annotation_payload_when_vep_fails() -> N
 
 def test_predict_batch_returns_mixed_success_and_failed_annotation_payloads() -> None:
     def fake_fetch_vep_annotation_record(normalized_variant):
-        if normalized_variant.submitted_variant == "ENST00000241453.12:c.2073T>G":
+        if normalized_variant.submitted_variant == "NC_000013.11:g.28027222A>C":
             raise variant_annotator.VariantAnnotationError(
                 "VEP annotation failed for all supported query forms.",
                 [
@@ -2621,7 +2762,7 @@ def test_predict_batch_returns_mixed_success_and_failed_annotation_payloads() ->
     try:
         response = client.post(
             "/predictOncogenicity",
-            json={"variants": ["NM_004119.3:c.2073T>G", "ENST00000241453.12:c.2073T>G"]},
+            json={"variants": ["NM_004119.3:c.2073T>G", "NC_000013.11:g.28027222A>C"]},
         )
     finally:
         monkeypatch_context.undo()

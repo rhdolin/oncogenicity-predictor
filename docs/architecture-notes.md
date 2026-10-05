@@ -11,21 +11,24 @@
 
 ## High-Level Flow
 
-1. Validate incoming HGVS variant input.
-2. Submit the variant to ClinGen for normalization.
-3. Reject malformed or unnormalizable variants with a structured error response instead of creating a `NormalizedVariant`.
-4. Use the normalized variant to collect annotations from VEP.
-5. Run evidence pipelines.
-6. Combine evidence into a final oncogenicity score.
-7. Format the result and supporting evidence as FHIR.
+1. Validate incoming variant input: HGVS or SPDI, on an `NC_` or `NM_` reference sequence.
+2. If the input is SPDI, translate it to HGVS through NCBI Variation Services.
+3. Submit the HGVS variant to ClinGen for normalization.
+4. Reject malformed, untranslatable, or unnormalizable variants with a structured error response instead of creating a `NormalizedVariant`.
+5. Use the normalized variant to collect annotations from VEP.
+6. Run evidence pipelines.
+7. Combine evidence into a final oncogenicity score.
+8. Format the result and supporting evidence as FHIR.
 
 ## Current Implementation Slice
 
 - The deployed API has already been validated on Render.
 - The current non-stub implementation slice is variant normalization, first-pass annotation, the population, computational, hotspot, predictive, OM1, OP2, and functional evidence pipelines, plus final score aggregation, interaction suppression, and compact FHIR Observation rendering.
 - `GET /annotateVariant` returns the internal annotation-layer result, `GET /summarizeEvidence` returns the raw evidence summary before FHIR mapping, `GET /predictOncogenicity` returns a single FHIR `Observation`, and `POST /predictOncogenicity` returns a FHIR `Bundle` of prediction `Observation` resources.
-- Submitted variants must currently be provided in HGVS format.
-- The route layer calls orchestration entrypoints. The annotation-only flow delegates to the ClinGen-backed variant normalizer and then the VEP-backed variant annotator, while the prediction flow continues through evidence building, score aggregation, and FHIR Observation mapping.
+- Submitted variants may be provided in HGVS or SPDI format; the format is detected automatically (SPDI is `sequence:position:deletion:insertion`, so it has three colons where HGVS has one).
+- For both formats, the reference sequence must be an `NC_` or `NM_` accession. Other prefixes are rejected before any external call is made.
+- SPDI input is translated to HGVS through the NCBI Variation Services `GET /spdi/{spdi}/hgvs` endpoint before ClinGen normalization. NCBI asks clients to limit requests to 1 per second, so these calls are paced in-process to at most one per second. NCBI error messages are passed through in the HTTP 400 response.
+- The route layer calls orchestration entrypoints. The annotation-only flow delegates to the variant normalizer (NCBI SPDI translation when needed, then ClinGen) and then the VEP-backed variant annotator, while the prediction flow continues through evidence building, score aggregation, and FHIR Observation mapping.
 - `canonical_b37` is currently populated only from a transcript allele that has a `genomeAlignments` entry for `GRCh37`, using the first primary `NM_` HGVS string from that transcript.
 - `representative_transcript_hgvs` is currently populated from the best available NCBI RefSeq transcript in this order: `mane_select_b38`, then `canonical_b37`, then the first `NM_` transcript returned by ClinGen.
 - `mane_select_b38` is populated from ClinGen when available; if ClinGen does not provide MANE Select, the annotation step can backfill it from VEP `hgvsc` on the MANE-marked RefSeq transcript row and mark `mane_select_b38_source` as `vep`.
@@ -125,7 +128,8 @@ The current internal normalization target is intentionally permissive.
 
 Notes:
 
-- The current implementation assumes successful normalization returns a `NormalizedVariant`; malformed or unnormalizable input returns an error instead.
+- The current implementation assumes successful normalization returns a `NormalizedVariant`; malformed, unsupported, untranslatable, or unnormalizable input returns an error instead.
+- `submitted_variant` is always the string exactly as submitted, HGVS or SPDI. `normalization.queried_variant` is the HGVS string sent to ClinGen: the submitted string for HGVS input, or the NCBI-translated HGVS for SPDI input.
 - Normalized genomic, transcript, and protein fields are populated only from NCBI RefSeq accessions: `NC_`, `NM_`, and `NP_`.
 - `representative_transcript_hgvs` is available as a practical fallback when MANE and canonical transcript fields are absent.
 
@@ -134,7 +138,7 @@ Notes:
 - `GET /annotateVariant` currently returns `AnnotatedVariant`.
 - `GET /annotateVariant` is the explicit annotation-oriented single-variant endpoint.
 - `GET /summarizeEvidence` currently returns `OncogenicityPredictionSummary`.
-- Prediction endpoints currently return a single FHIR Observation-style object with `issued`, a custom extension carrying the submitted variant HGVS string, an overall score, a final classification, and only the score-contributing evidence components.
+- Prediction endpoints currently return a single FHIR Observation-style object with `issued`, a custom extension carrying the submitted variant string exactly as provided (HGVS or SPDI), an overall score, a final classification, and only the score-contributing evidence components.
 - Batch prediction requests return a FHIR bundle with a list of FHIR observations, one per variant.
 - Prediction success/failure is currently expressed through the internal summary surface rather than by embedding the internal annotation result into the clinician-facing FHIR output.
 - FHIR rendering currently lives in `app/services/fhir/observation_builder.py` and is intentionally lightweight rather than profile-complete.

@@ -2,7 +2,7 @@
 
 This project predicts the oncogenicity of genomic variants and reports the result using the ClinGen/CGC/VICC oncogenicity framework described at https://pmc.ncbi.nlm.nih.gov/articles/PMC9081216/.
 
-This repository contains a minimal FastAPI service that accepts HGVS variants, normalizes and annotates them, evaluates the currently implemented evidence pipelines, and returns an initial FHIR Observation-style oncogenicity prediction.
+This repository contains a minimal FastAPI service that accepts HGVS or SPDI variants, normalizes and annotates them, evaluates the currently implemented evidence pipelines, and returns an initial FHIR Observation-style oncogenicity prediction.
 
 The live API can be explored and tested directly at https://oncogenicity-predictor.onrender.com/docs.
 
@@ -19,14 +19,29 @@ The live API can be explored and tested directly at https://oncogenicity-predict
 - `GET /annotateVariant?variant=NM_004119.3%3Ac.2073T%3EG`
 - `GET /summarizeEvidence?variant=NM_004119.3%3Ac.2073T%3EG[&tumorType=Breast%20Cancer]`
 - `GET /predictOncogenicity?variant=NM_004119.3%3Ac.2073T%3EG[&tumorType=Breast%20Cancer]`
+- `GET /predictOncogenicity?variant=NC_000013.11%3A28027221%3AA%3AC` (SPDI input)
 - `POST /predictOncogenicity`
 - `GET /docs`
 
-The current `GET /annotateVariant` endpoint accepts a single variant in HGVS format, normalizes it through ClinGen, annotates it through Ensembl VEP, and returns the internal `AnnotatedVariant` JSON shape.
-The current `GET /summarizeEvidence` endpoint accepts a single variant in HGVS format and returns the raw evidence summary JSON before FHIR Observation mapping. It also accepts an optional `tumorType` query parameter used by context-dependent evidence rules. If no evidence lanes are evaluable, the summary returns a top-level `dataAbsentReason` plus a `predictionStatement`, and omits final score/classification.
-The current `GET /predictOncogenicity` endpoint accepts a single variant in HGVS format, normalizes it through ClinGen, annotates it through Ensembl VEP, evaluates the currently implemented evidence pipelines, and returns a single FHIR Observation-style prediction object with final classification when available plus only score-contributing evidence components. If no evidence lanes are evaluable, the FHIR Observation instead uses a top-level `dataAbsentReason`. It also accepts an optional `tumorType` query parameter used by context-dependent evidence rules.
-The current `POST /predictOncogenicity` endpoint accepts a list of variants in HGVS format and returns a FHIR `Bundle` containing one `Observation` resource per input variant. It also accepts an optional top-level `tumorType` field applied to every variant in the batch.
+The current `GET /annotateVariant` endpoint accepts a single variant in HGVS or SPDI format, normalizes it through ClinGen, annotates it through Ensembl VEP, and returns the internal `AnnotatedVariant` JSON shape.
+The current `GET /summarizeEvidence` endpoint accepts a single variant in HGVS or SPDI format and returns the raw evidence summary JSON before FHIR Observation mapping. It also accepts an optional `tumorType` query parameter used by context-dependent evidence rules. If no evidence lanes are evaluable, the summary returns a top-level `dataAbsentReason` plus a `predictionStatement`, and omits final score/classification.
+The current `GET /predictOncogenicity` endpoint accepts a single variant in HGVS or SPDI format, normalizes it through ClinGen, annotates it through Ensembl VEP, evaluates the currently implemented evidence pipelines, and returns a single FHIR Observation-style prediction object with final classification when available plus only score-contributing evidence components. If no evidence lanes are evaluable, the FHIR Observation instead uses a top-level `dataAbsentReason`. It also accepts an optional `tumorType` query parameter used by context-dependent evidence rules.
+The current `POST /predictOncogenicity` endpoint accepts a list of variants in HGVS or SPDI format, which may be mixed within one request, and returns a FHIR `Bundle` containing one `Observation` resource per input variant. It also accepts an optional top-level `tumorType` field applied to every variant in the batch.
 If VEP annotation fails for a variant, the prediction endpoints still return an in-band observation rather than failing the whole request, but the clinician-facing FHIR component list remains compact and may therefore be empty, with a top-level `dataAbsentReason` describing the unavailable overall prediction. The full audit surface lives in `GET /summarizeEvidence`.
+Normalization failures are different: if a variant is rejected, cannot be translated from SPDI, or cannot be normalized by ClinGen, the endpoint returns HTTP 400 with an error message, and for `POST /predictOncogenicity` that fails the whole batch.
+
+## Variant Input
+
+Submitted variants may be provided in either of two formats. The format is detected automatically.
+
+- HGVS, for example `NM_004119.3:c.2073T>G` or `NC_000013.11:g.28027222A>C`
+- SPDI (`sequence:position:deletion:insertion`, with a 0-based position), for example `NC_000013.11:28027221:A:C`
+
+In both formats the reference sequence must be an NCBI RefSeq chromosome (`NC_`) or transcript (`NM_`) accession. Other reference sequences, such as `NP_`, `NG_`, or Ensembl `ENST` accessions, are rejected with HTTP 400.
+
+SPDI input is first translated to HGVS through the NCBI Variation Services `GET /spdi/{spdi}/hgvs` endpoint (https://api.ncbi.nlm.nih.gov/variation/v0/), and the returned HGVS is then sent to ClinGen. NCBI asks clients to send at most 1 request per second, so the service paces SPDI translation calls accordingly; large SPDI batches therefore take at least one second per SPDI variant. HGVS input does not call NCBI Variation Services. NCBI error messages, such as a mismatch between the asserted and actual reference allele, are passed through in the HTTP 400 response.
+
+The submitted string is preserved as-is in `normalizedVariant.submitted_variant` and in the FHIR submitted-variant extension, while `normalizedVariant.normalization.queried_variant` records the HGVS string actually sent to ClinGen.
 
 ## Local Run
 
@@ -79,12 +94,10 @@ After deployment, the interactive API docs should be available at `/docs` on the
 
 This is an incremental implementation.
 
-- Current behavior: ClinGen-backed normalization, Ensembl VEP annotation, population, computational, hotspot, predictive, OM1, OP2, and ClinMAVE-backed functional evidence scoring, and single-Observation prediction output for the prediction endpoints
+- Current behavior: HGVS and SPDI input, NCBI-backed SPDI-to-HGVS translation, ClinGen-backed normalization, Ensembl VEP annotation, population, computational, hotspot, predictive, OM1, OP2, and ClinMAVE-backed functional evidence scoring, and single-Observation prediction output for the prediction endpoints
 - Planned later behavior: additional evidence pipelines and further scoring refinements
 
 The current rule set is deliberately narrower than mature manual-curation frameworks. Many disease-specific, gene-specific, and expert-panel-specific caveats and special cases are still documented limitations in v1 rather than automated logic.
-
-At the moment, the normalization and annotation path requires submitted variants to be in HGVS format.
 
 The current annotation payload from `GET /annotateVariant` includes:
 
@@ -112,7 +125,7 @@ Current annotation behavior includes:
 The current single-variant prediction payload from `GET /predictOncogenicity` includes:
 
 - top-level `Observation.issued` for the prediction timestamp
-- top-level `Observation.extension` carrying the submitted variant HGVS string
+- top-level `Observation.extension` carrying the submitted variant string exactly as provided (HGVS or SPDI)
 - top-level `Observation.valueInteger` for the overall score when available
 - top-level `Observation.interpretation` for the final classification when available
 - top-level `Observation.dataAbsentReason` when the overall prediction is unavailable

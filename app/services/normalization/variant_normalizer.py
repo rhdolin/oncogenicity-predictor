@@ -1,4 +1,6 @@
 import re
+import time
+from urllib.parse import quote
 
 import httpx
 
@@ -15,6 +17,10 @@ from app.models.normalized_variant import (
 
 
 CLINGEN_ALLELE_REGISTRY_URL = "https://reg.clinicalgenome.org/allele"
+NCBI_SPDI_TO_HGVS_URL = "https://api.ncbi.nlm.nih.gov/variation/v0/spdi/{spdi}/hgvs"
+# NCBI Variation Services asks clients to limit requests to 1 per second.
+NCBI_VARIATION_MIN_REQUEST_INTERVAL_SECONDS = 1.0
+SUPPORTED_REFERENCE_SEQUENCE_PREFIXES = ("NC_", "NM_")
 AMINO_ACID_THREE_TO_ONE = {
     "Ala": "A",
     "Arg": "R",
@@ -44,6 +50,9 @@ class VariantNormalizationError(Exception):
     pass
 
 
+_last_ncbi_variation_request_started_at = 0.0
+
+
 def fetch_allele_registry_record(submitted_variant: str) -> dict:
     try:
         response = httpx.get(
@@ -66,8 +75,79 @@ def fetch_allele_registry_record(submitted_variant: str) -> dict:
     return payload
 
 
+def is_spdi(submitted_variant: str) -> bool:
+    """Return True when the submitted variant uses SPDI (sequence:position:deletion:insertion) syntax."""
+    return submitted_variant.count(":") == 3
+
+
+def translate_spdi_to_hgvs(submitted_spdi: str) -> str:
+    """Translate one SPDI expression into HGVS through NCBI Variation Services."""
+    _pace_ncbi_variation_request()
+    try:
+        response = httpx.get(
+            NCBI_SPDI_TO_HGVS_URL.format(spdi=quote(submitted_spdi, safe=":")),
+            timeout=30.0,
+        )
+    except httpx.HTTPError as exc:
+        raise VariantNormalizationError(
+            f"NCBI SPDI to HGVS translation failed for '{submitted_spdi}'."
+        ) from exc
+
+    payload = _parse_json_or_none(response)
+    if response.is_error:
+        error_message = ((payload or {}).get("error") or {}).get("message")
+        detail = f" {error_message}" if error_message else ""
+        raise VariantNormalizationError(
+            f"NCBI SPDI to HGVS translation failed for '{submitted_spdi}'.{detail}"
+        )
+
+    hgvs_value = ((payload or {}).get("data") or {}).get("hgvs")
+    if not isinstance(hgvs_value, str) or not hgvs_value:
+        raise VariantNormalizationError(
+            f"NCBI returned no HGVS translation for '{submitted_spdi}'."
+        )
+
+    return hgvs_value
+
+
+def _parse_json_or_none(response: httpx.Response) -> dict | None:
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _pace_ncbi_variation_request() -> None:
+    global _last_ncbi_variation_request_started_at
+
+    now = time.monotonic()
+    elapsed = now - _last_ncbi_variation_request_started_at
+    if elapsed < NCBI_VARIATION_MIN_REQUEST_INTERVAL_SECONDS:
+        time.sleep(NCBI_VARIATION_MIN_REQUEST_INTERVAL_SECONDS - elapsed)
+        now = time.monotonic()
+
+    _last_ncbi_variation_request_started_at = now
+
+
+def resolve_query_hgvs(submitted_variant: str) -> str:
+    """Validate the submitted variant and return the HGVS string to send to ClinGen."""
+    reference_sequence = submitted_variant.split(":", maxsplit=1)[0]
+    if not reference_sequence.startswith(SUPPORTED_REFERENCE_SEQUENCE_PREFIXES):
+        raise VariantNormalizationError(
+            f"Unsupported reference sequence in '{submitted_variant}'. "
+            "Variants must use an NCBI chromosome (NC_) or transcript (NM_) reference sequence."
+        )
+
+    if is_spdi(submitted_variant):
+        return translate_spdi_to_hgvs(submitted_variant)
+
+    return submitted_variant
+
+
 def normalize_variant(submitted_variant: str) -> NormalizedVariant:
-    record = fetch_allele_registry_record(submitted_variant)
+    queried_variant = resolve_query_hgvs(submitted_variant)
+    record = fetch_allele_registry_record(queried_variant)
     gene_symbol, gene_ncbi_id = _select_gene_metadata(record)
 
     genomic_hgvs, coordinates = _extract_genomic_representations(record)
@@ -78,7 +158,7 @@ def normalize_variant(submitted_variant: str) -> NormalizedVariant:
         submitted_variant=submitted_variant,
         normalization=NormalizationMetadata(
             source="ClinGen Allele Registry",
-            queried_variant=submitted_variant,
+            queried_variant=queried_variant,
         ),
         identifiers=VariantIdentifiers(caid=_extract_caid(record)),
         geneSymbol=gene_symbol,

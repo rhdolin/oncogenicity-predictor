@@ -67,7 +67,7 @@ def _summarize_variant_or_raise(
     response_model_exclude_none=True,
     summary="Predict oncogenicity for a single variant",
     description=(
-        "Accepts one submitted variant in HGVS format, normalizes it through the "
+        "Accepts one submitted variant in HGVS or SPDI format, normalizes it through the "
         "ClinGen Allele Registry, annotates it through Ensembl VEP, evaluates "
         "the currently implemented evidence pipelines, and returns a single "
         "FHIR Observation-style prediction object with `issued`, a custom "
@@ -80,7 +80,10 @@ def _summarize_variant_or_raise(
 )
 def predict_single(
     variant: str = Query(
-        description="Variant for which to predict oncogenicity. Must be provided in HGVS format.",
+        description=(
+            "Variant for which to predict oncogenicity. Must be provided in "
+            "HGVS or SPDI format on an NC_ or NM_ reference sequence."
+        ),
         example="NM_001002295.2:c.3G>A",
     ),
     tumorType: TumorType | None = Query(
@@ -99,7 +102,7 @@ def predict_single(
     response_model=AnnotatedVariant,
     summary="Annotate a single variant",
     description=(
-        "Accepts one submitted variant in HGVS format, normalizes it through the "
+        "Accepts one submitted variant in HGVS or SPDI format, normalizes it through the "
         "ClinGen Allele Registry, annotates it through Ensembl VEP, and returns "
         "the internal AnnotatedVariant JSON shape. If annotation fails, the "
         "response still returns NormalizedVariant data plus annotation failure "
@@ -108,7 +111,10 @@ def predict_single(
 )
 def annotate_single(
     variant: str = Query(
-        description="Variant to annotate. Must be provided in HGVS format.",
+        description=(
+            "Variant to annotate. Must be provided in "
+            "HGVS or SPDI format on an NC_ or NM_ reference sequence."
+        ),
         example="NM_001002295.2:c.3G>A",
     ),
 ) -> AnnotatedVariant:
@@ -122,7 +128,7 @@ def annotate_single(
     response_model=OncogenicityPredictionSummary,
     summary="Summarize evidence for a single variant",
     description=(
-        "Internal/debug endpoint. Accepts one submitted variant in HGVS format, "
+        "Internal/debug endpoint. Accepts one submitted variant in HGVS or SPDI format, "
         "normalizes it through the ClinGen Allele Registry, annotates it through "
         "Ensembl VEP, evaluates the currently implemented evidence pipelines, "
         "and returns the raw evidence summary JSON before FHIR Observation mapping. "
@@ -133,7 +139,10 @@ def annotate_single(
 )
 def summarize_single(
     variant: str = Query(
-        description="Variant to summarize. Must be provided in HGVS format.",
+        description=(
+            "Variant to summarize. Must be provided in "
+            "HGVS or SPDI format on an NC_ or NM_ reference sequence."
+        ),
         example="NM_001002295.2:c.3G>A",
     ),
     tumorType: TumorType | None = Query(
@@ -153,7 +162,7 @@ def summarize_single(
     response_model_exclude_none=True,
     summary="Predict oncogenicity for a batch of variants",
     description=(
-        "Accepts a list of submitted variants in HGVS format, normalizes each one "
+        "Accepts a list of submitted variants in HGVS or SPDI format, normalizes each one "
         "through ClinGen, annotates each one through Ensembl VEP, evaluates the "
         "currently implemented evidence pipelines, and returns a FHIR Bundle "
         "containing one Observation-style prediction resource per input variant. Variants with annotation "
